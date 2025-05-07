@@ -30,7 +30,7 @@ equations:
     ~ z = rho_z * z(-1) + e_z
 
     # SW-type shock on risk premium
-    ~ u = rho_u * u(-1) + e_u 
+    ~ u = rho_u * u(-1) + e_u
 
     # MP Shock
     ~ vr = rho_r*vr(-1) + e_r
@@ -44,7 +44,7 @@ equations:
   constraint:
     # the actual constraint in the form r = max(..., x_bar). The constrained variable MUST be at the LHS. Here it is the ZLB. This reads r = max(rn, x_bar), hence the nominal rate is either the notational rate but never smaller than x_bar.
     ~ r = rn
-    
+
   # measurement equations
   observables:
     # Output growth
@@ -100,8 +100,8 @@ estimation:
     # Priors are structured as follows:
     # name  : [initval, lb, ub, dist_type, dist_p1, dist_p2]
     # The initial value (initial) is currently not used during estimation and can be None
-    # Lower & upper bound (lb, ub) are only used during global mode search and therefor essential, but not during sampling
-    # dist_type (distribution type) can be uniform, normal, gamma, beta, inv_gamma and inv_gamma_dynare (the exact copy of what dynare does to the inverse gamma distribution).
+    # Lower & upper bound (lb, ub) are only used during global mode search and therefore essential, but not during sampling
+    # dist_type (distribution type) can be uniform, normal, gamma, beta, inv_gamma and inv_gamma_dynare (the exact copy of what Dynare does to the inverse gamma distribution).
     # uniform distribution takes lower & upper as input
     # inv_gamma_dynare function takes weird stuff as input
     # all other function take mean & std as input

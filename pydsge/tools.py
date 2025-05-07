@@ -182,15 +182,15 @@ def irfs(
     linear : bool, optional
         Simulate linear model (default: False)
     set_k: int, optional
-        Enforce a `k` (defaults to False)
+        Enforce a `k` (default: False)
     force_init_equil:
-        If set to `False`, the equilibrium will be recalculated every iteration. This may be problematic if there is multiplicity because the algoritm selects the equilibrium with the lowest (l,k) (defaults to True)
+        If set to `False`, the equilibrium will be recalculated every iteration. This may be problematic if there is multiplicity because the algoritm selects the equilibrium with the lowest (l,k) (default: True)
     verbose : bool or int, optional
         Level of verbosity (default: 1)
 
     Returns
     -------
-    DataFrame, tuple(int,int)
+    DataFrame, tuple(int, int)
         The simulated series as a pandas.DataFrame object and the expected durations at the constraint
     """
 
@@ -206,9 +206,15 @@ def irfs(
         ]
 
     if not hasattr(self, "par"):
+        if verbose > 2:
+            print("[irfs:]".ljust(15, " ") + "Recreating system")
+
         gen_sys(self, verbose=verbose, **args)
 
     if hasattr(self, "pool"):
+        if verbose > 2:
+            print("[irfs:]".ljust(15, " ") + "Creating pool")
+
         from .estimation import create_pool
 
         create_pool(self)
@@ -231,6 +237,9 @@ def irfs(
     pickled_self = dill.dumps(self, recurse=True)
 
     def runner(par):
+
+        if verbose > 2:
+            print("[irfs:]".ljust(15, " ") + "Runner active")
 
         pelf = dill.loads(pickled_self)
 
@@ -284,7 +293,7 @@ def irfs(
                 if verbose > 1 and multflag:
                     print(
                         "[irfs:]".ljust(15, " ")
-                        + "Multiplicity found in period %s: new eql. %s coexits with old eql. %s."
+                        + "Multiplicity found in period %s: new equilibrium %s coexists with old equilibrium %s."
                         % (t, (l_endo, k_endo), set_k_eff)
                     )
 
@@ -328,8 +337,13 @@ def irfs(
             L[t] = l
             K[t] = k
 
+        if verbose > 2:
+            print("[irfs:]".ljust(15, " ") + "Runner done")
+
         return X, L, K, supererrflag, supermultflag
 
+    if verbose > 2:
+        print("[irfs:]".ljust(15, " ") + "Computing IRFs")
     if pars is not None and np.ndim(pars) > 1:
         res = self.mapper(runner, pars)
         X, L, K, flag, multflag = map2arr(res)
@@ -339,10 +353,10 @@ def irfs(
 
     if verbose > 0:
         if np.any(flag):
-            print("[irfs:]".ljust(14, " ") + " No OBC solution(s) found.")
+            print("[irfs:]".ljust(15, " ") + "No OBC solution(s) found.")
         elif np.any(multflag):
-            print("[irfs:]".ljust(14, " ") +
-                  " Multiplicity/Multiplicities found.")
+            print("[irfs:]".ljust(15, " ") +
+                  "Multiplicity/multiplicities found.")
 
     if verbose > 2:
         print(
