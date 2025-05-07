@@ -236,10 +236,10 @@ def irfs(
 
     pickled_self = dill.dumps(self, recurse=True)
 
-    def runner(par):
+    def runner(par, num=None):
 
-        if verbose > 2:
-            print("[irfs:]".ljust(15, " ") + "Runner active")
+        if verbose > 2 and num is not None:
+            print("[irfs:]".ljust(15, " ") + f"Runner {num} active")
 
         pelf = dill.loads(pickled_self)
 
@@ -337,15 +337,15 @@ def irfs(
             L[t] = l
             K[t] = k
 
-        if verbose > 2:
-            print("[irfs:]".ljust(15, " ") + "Runner done")
+        if verbose > 2 and num is not None:
+            print("[irfs:]".ljust(15, " ") + f"Runner {num} done")
 
         return X, L, K, supererrflag, supermultflag
 
     if verbose > 2:
         print("[irfs:]".ljust(15, " ") + "Computing IRFs")
     if pars is not None and np.ndim(pars) > 1:
-        res = self.mapper(runner, pars)
+        res = self.mapper(lambda args: runner(args[0], args[1]), zip(pars, range(len(pars))))
         X, L, K, flag, multflag = map2arr(res)
     else:
         X, L, K, flag, multflag = runner(pars)
