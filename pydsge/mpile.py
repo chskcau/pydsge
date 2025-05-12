@@ -293,11 +293,11 @@ def set_par(
     dummy : str or array, optional
         If an array, sets all parameters. If a string and a parameter name,`setpar` must be provided to define the value of this parameter. Otherwise, `dummy` is forwarded to `get_par` and the returning value(s) are set as parameters.
     setpar : float, optional
-        Parametervalue to be set. Of course, only if `dummy` is a parameter name.
+        Parameter value to be set. Of course, only if `dummy` is a parameter name.
     npar : array, optional
-        Vector of parameters. If given, this vector will be altered and returnd without recompiling the model. THIS WILL ALTER THE PARAMTER WITHOUT MAKING A COPY!
+        Vector of parameters. If given, this vector will be altered and returned without recompiling the model. THIS WILL ALTER THE PARAMETER WITHOUT MAKING A COPY!
     verbose : bool
-        Whether to output more or less informative messages (defaults to False)
+        Whether to output more or less informative messages (default: False)
     roundto : int
         Define output precision if output is verbose. (default: 5)
     args : keyword args
