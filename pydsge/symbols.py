@@ -28,21 +28,29 @@ class TSymbol(sympy.Symbol):
 
         if "date" not in args:
             self._assumptions_orig["date"] = 0
-            self._assumptions0 += ("date", 0),
+            self._add_assumption0("date", 0)
         else:
             self._assumptions_orig["date"] = args["date"]
-            self._assumptions0 += ("date", args["date"]),
+            self._add_assumption0("date", args["date"])
         if "exp_date" not in args:
             self._assumptions_orig["exp_date"] = 0
-            self._assumptions0 += ("exp_date", 0),
+            self._add_assumption0("exp_date", 0)
         else:
             self._assumptions_orig["exp_date"] = args["exp_date"]
-            self._assumptions0 += ("exp_date", args["exp_date"]),
+            self._add_assumption0("exp_date", args["exp_date"])
 
         self._mhash = None
         self.__hash__()
 
         return None
+
+    # Handle different sympy versions
+    def _add_assumption0(self, key, val):
+        if isinstance(self._assumptions0, dict):
+            self._assumptions0[key] = val
+        else:
+            # FIXME: this should check if key is already present?
+            self._assumptions0 += (key, val),
 
     def __call__(self, lead):
         newdate = int(self.date) + int(lead)
