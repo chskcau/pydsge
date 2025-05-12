@@ -28,6 +28,7 @@ def posterior_sampler(self, nsamples, seed=0, verbose=True):
     """
 
     random.seed(seed)
+
     sample = self.get_chain()[-self.get_tune:]
     sample = sample.reshape(-1, sample.shape[(-1)])
     sample = random.choices(sample, k=nsamples)
@@ -39,6 +40,7 @@ def prior_sampler(
     nsamples,
     try_parameter=True,
     check_likelihood=False,
+    seed=None,
     verbose=True,
     debug=False,
     **kwargs
@@ -62,19 +64,20 @@ def prior_sampler(
         Numpy array of parameters
     """
 
+    if seed is not None:
+        random.seed(seed)
+
     if check_likelihood and not hasattr(self, "ndim"):
-        self.prep_estim(load_R=True, verbose=verbose > 2)
+        self.prep_estim(load_R=True, seed=seed, verbose=verbose > 2)
 
     frozen_prior = self.fdict.get("frozen_prior")
 
     if not np.any(frozen_prior):
-
         frozen_prior = get_prior(self.prior, verbose=verbose)[0]
 
     self.debug |= debug
 
     if not debug and hasattr(self, "pool"):
-
         from .estimation import create_pool
         create_pool(self)
 
@@ -86,7 +89,7 @@ def prior_sampler(
     elif try_parameter:
         check_func = serializer(self.set_par)
 
-    return get_prior_sample(frozen_prior, nsamples, check_func=check_func, mapper=self.mapper, verbose=verbose, **kwargs)
+    return get_prior_sample(frozen_prior, nsamples, check_func=check_func, mapper=self.mapper, verbose=verbose, seed=seed, **kwargs)
 
 
 def get_par(
@@ -96,6 +99,7 @@ def get_par(
     asdict=False,
     full=True,
     nsamples=1,
+    seed=None,
     verbose=False,
     roundto=5,
     debug=False,
@@ -141,23 +145,25 @@ def get_par(
 
     if not hasattr(self, "par"):
         gen_sys(self, verbose=verbose, **args)
+
     pfnames, pffunc = self.parafunc
     pars_str = [str(p) for p in self.parameters]
     pars = np.array(self.par) if hasattr(
         self, "par") else np.array(self.par_fix)
+
     if npar is not None:
         if len(npar) != len(self.par_fix):
             pars[self.prior_arg] = npar
         else:
             pars = npar
+
     if dummy is None:
         try:
             par_cand = np.array(pars)[self.prior_arg]
         except:
             par_cand = get_par(
-                self, "best", asdict=False, full=False, verbose=verbose, **args
+                self, "best", asdict=False, full=False, seed=seed, verbose=verbose, **args
             )
-
     elif not isinstance(dummy, str) and len(dummy) == len(self.par_fix):
         par_cand = dummy[self.prior_arg]
     elif not isinstance(dummy, str) and len(dummy) == len(self.prior_arg):
@@ -182,11 +188,11 @@ def get_par(
         if dummy == "best":
             try:
                 par_cand = get_par(
-                    self, "mode", asdict=False, full=False, verbose=verbose, **args
+                    self, "mode", asdict=False, full=False, seed=seed, verbose=verbose, **args
                 )
             except:
                 par_cand = get_par(
-                    self, "init", asdict=False, full=False, verbose=verbose, **args
+                    self, "init", asdict=False, full=False, seed=seed, verbose=verbose, **args
                 )
 
         else:
@@ -195,7 +201,7 @@ def get_par(
             self.par = self.par_fix
             if dummy == "prior":
                 par_cand = prior_sampler(
-                    self, nsamples=nsamples, verbose=verbose, debug=debug, **args
+                    self, nsamples=nsamples, seed=seed, verbose=verbose, debug=debug, **args
                 )
             elif dummy in ("post", "posterior"):
                 par_cand = posterior_sampler(
