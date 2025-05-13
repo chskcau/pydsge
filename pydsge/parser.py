@@ -199,6 +199,10 @@ class DSGE(Model):
         return self["mod_name"]
 
     @property
+    def mod_description(self):
+        return self["mod_description"]
+
+    @property
     def neq(self):
         return len(self["perturb_eq"])
 
@@ -538,7 +542,7 @@ class DSGE(Model):
 
             pmodel.fdict["model_dump"] = cpickle.dumps(pmodel, protocol=4)
             pmodel.name = pmodel.mod_name
-            pmodel.description = pmodel.mod_name
+            pmodel.description = pmodel.mod_description
             pmodel.path = os.path.dirname(mfile)
             pmodel.debug = False
 
@@ -550,12 +554,12 @@ class DSGE(Model):
         if verbose:
             duration = np.round(time.time() - st, 3)
             if duration < 0.01:
-                duration = "the speed of light"
+                duration = "at the speed of light"
             else:
-                duration = str(duration) + "s"
+                duration = "in " + str(duration) + "s"
             print(
                 "[DSGE:]".ljust(15, " ") +
-                " Reading and parsing done in %s." % duration
+                " Reading and parsing done %s." % duration
             )
 
         return pmodel
@@ -659,6 +663,11 @@ class DSGE(Model):
         mtxt = mtxt.replace("   ~ ", "   - ")
         model_yaml = yaml.safe_load(mtxt)
 
+        if not isinstance(model_yaml, dict):
+            raise SyntaxError(
+                "pyyaml.safe_load() did not return a dictionary. There is something seriously wrong with your model file..."
+            )
+
         if debug:
             _dumper(model_yaml, name="model_yaml")
 
@@ -666,6 +675,10 @@ class DSGE(Model):
         cal = model_yaml["calibration"]
 
         name = dec["name"]
+        if "description" in dec:
+            description = dec["description"]
+        else:
+            description = dec["name"]
 
         var_contains_spaces = [" " in varname for varname in dec["variables"]]
         if any(var_contains_spaces):
@@ -944,7 +957,8 @@ class DSGE(Model):
             "info": info,
             "make_log": make_log,
             "__data__": model_yaml,
-            "mod_name": dec["name"],
+            "mod_name": name,
+            "mod_description": description,
             "observables": observables,
             "obs_equations": obs_equations,
             "file": mtxt,
@@ -971,5 +985,8 @@ class DSGE(Model):
         model.observables = [str(o) for o in observables]
         model.vo = np.array(model.observables)
         model.ve = np.array(model.shocks)
+
+        if verbose:
+            print("[DSGE:]".ljust(15, " ") + " Parsing done")
 
         return model
