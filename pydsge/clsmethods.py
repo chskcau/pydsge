@@ -305,6 +305,12 @@ def load_data(self, df, start=None, end=None):
     if not isinstance(df, pd.DataFrame):
         raise TypeError("Type of input data must be a `pandas.DataFrame`.")
 
+    # Variable names in data might contain trailing (possibly also leading) whitespace
+    # This is almost never intentional and may cause seemingly paradoxical errors
+    # ("'piobs is not in the data!', but printing the data frame suggests it is), so
+    # strip such whitespace.
+    df.columns = df.columns.str.strip()
+
     if self is not None:
         for o in self.observables:
             if str(o) not in df.keys():
