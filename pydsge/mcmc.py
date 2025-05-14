@@ -19,7 +19,7 @@ def mcmc(
     nwalks=None,
     tune=None,
     moves=None,
-    temp=False,
+    temp=1,
     seed=None,
     backend=True,
     suffix=None,
@@ -33,23 +33,23 @@ def mcmc(
     Parameters
     ----------
     p0 : ndarray, optional
-        Array of initial states of the walkers in the parameterspace
+        Array of initial states of the walkers in the parameter space
     nsteps : int, optional
-        Number of iterations. Defaults to 3000
+        Number of iterations. Default: 3000
     nwalks : int, optional
-        Number of walkers. At default tries to infer from `p0`
+        Number of walkers. Default: inferred from `p0`
     tune : int, optional
-        Number of tuning periods
-    moves : emcee.moves object, optional
-        Type of `emcee` sampler. Defaults to the DIME sampler
+        Number of tuning periods. Only used when likelihood tempering is disabled
+    moves : emcee.moves object (optional)
+        Type of `emcee` sampler. Default: DIME sampler
     temp : float, optional
-        Likelihood tempering. No tempering (`temp=1`) at default
+        Likelihood tempering. Default: 1 (no tempering)
     seed : int, optional
-        Random seed. Defaults to 0
+        Random seed. Default: 0
     backend : various, optional
         Optional backends for storing
     suffix : string, optional
-        Prefered suffix to the backend
+        Preferred suffix to the backend
     resume : bool, optional
         Whether to resume an estimation from the backend
     append : bool, optional
@@ -59,7 +59,7 @@ def mcmc(
     """
 
     if not hasattr(self, "ndim"):
-        # if it seems to be missing, lets do it.
+        # if it seems to be missing, let's do it.
         # but without guarantee...
         self.prep_estim(load_R=True)
 
@@ -68,21 +68,15 @@ def mcmc(
     # necessary since DIME uses complementary ensembles
     np.random.seed(seed)
 
-    self.tune = tune
-    if tune is None:
-        self.tune = int(nsteps * 1 / 5.0)
+    self.tune = tune if tune is not None else int(nsteps * 1 / 5.0)
 
     if "description" in self.fdict.keys():
         self.description = self.fdict["description"]
 
     if hasattr(self, "debug") and self.debug:
-
         self.pool = None
-
     elif hasattr(self, "pool"):
-
         from .estimation import create_pool
-
         create_pool(self)
 
     lprob_global = serializer(self.lprob)
@@ -100,7 +94,7 @@ def mcmc(
             temp=temp
         )
 
-    if self.pool:
+    if self.pool is not None:
         self.pool.clear()
 
     if p0 is None and not resume:
