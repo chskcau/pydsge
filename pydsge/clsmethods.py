@@ -315,7 +315,7 @@ def load_data(self, df, start=None, end=None):
         for o in self.observables:
             if str(o) not in df.keys():
                 raise KeyError("%s is not in the data!" % o)
-
+        # Select observables from data frame; this also creates a copy
         d = df[self.observables]
 
     if start is not None:
