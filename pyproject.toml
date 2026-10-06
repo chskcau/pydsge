@@ -1,3 +1,58 @@
 [build-system]
-requires = ["setuptools"]
+requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"
+
+[project]
+name = "pydsge"
+dynamic = ["version"]
+description = "Solve, filter and estimate DSGE models with occasionaly binding constraints"
+readme = { file = "README.rst", content-type = "text/x-rst" }
+requires-python = ">=3.12"
+authors = [
+    { name = "Gregor Boehl", email = "admin@gregorboehl.com" },
+]
+license = "MIT"
+license-files = ["LICENSE"]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.14",
+]
+dependencies = [
+    "numba",
+    "emcee",
+    "numpy",
+    "pandas",
+    "pathos",
+    "dill",
+    "tqdm",
+    "cloudpickle",
+    "h5py",
+    "pyyaml",
+    "scipy",
+    "sympy>=1.12",
+    "emcwrap>=0.2.5",
+    "grgrlib>=0.1.15",
+    "econsieve>=0.0.9",
+    "threadpoolctl>=3.1.0",
+]
+
+[project.urls]
+Homepage = "https://pydsge.readthedocs.io/en/latest/index.html"
+
+[dependency-groups]
+dev = [
+    "pytest",
+]
+
+[tool.setuptools]
+include-package-data = true
+
+[tool.setuptools.packages.find]
+include = ["pydsge", "pydsge.*"]
+namespaces = false
+
+[tool.setuptools.package-data]
+pydsge = ["examples/*"]
+
+[tool.setuptools.dynamic]
+version = { attr = "pydsge.__version__.__version__" }
