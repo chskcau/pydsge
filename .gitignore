@@ -22,3 +22,5 @@ venv*
 .tox
 env
 .eggs
+
+pydsge/examples/dfi_sampler.h5
