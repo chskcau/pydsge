@@ -56,3 +56,7 @@ pydsge = ["examples/*"]
 
 [tool.setuptools.dynamic]
 version = { attr = "pydsge.__version__.__version__" }
+
+[tool.pytest.ini_options]
+testpaths = ["pydsge/tests"]
+addopts = "-ra"
