@@ -1,6 +1,6 @@
 """This file contains tests for the solving of the model."""
-import pytest
 import numpy as np
+import pytest
 
 from pydsge import DSGE
 

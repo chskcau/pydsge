@@ -1,0 +1,36 @@
+declarations:
+  name: linear_gaussian
+  variables: [x, z, r]
+  constrained: [r]
+  parameters: [rho_x, rho_z, sig_x, sig_z, mean_x, mean_z, x_bar]
+  shocks: [e_x, e_z]
+  observables: [X, Z]
+
+equations:
+  model:
+    # In the unconstrained linear solution, r=z gives two independent AR(1) states.
+    - x = rho_x*x(-1) + r - z + e_x
+    - z = rho_z*z(-1) + e_z
+  constraint:
+    - r = z
+  observables:
+    X: x + 0.4*z + mean_x
+    Z: -0.3*x + 1.2*z + mean_z
+
+calibration:
+  parameters:
+    rho_x: 0.6
+    rho_z: 0.3
+    sig_x: 0.4
+    sig_z: 0.7
+    mean_x: 1.25
+    mean_z: -0.8
+    x_bar: -5.0
+  covariances:
+    e_x: sig_x
+    e_z: sig_z
+
+estimation:
+  prior:
+    rho_x: [0.6, -0.95, 0.95, normal, 0.6, 0.1]
+    sig_x: [0.4, 0.05, 1.0, normal, 0.4, 0.1]
