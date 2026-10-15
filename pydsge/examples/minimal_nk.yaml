@@ -12,7 +12,7 @@ declarations:
   parameters: [beta, theta, phi_pi, rho_u, sig_u, elb_level, pi_mean]
   shocks: [e_u]
   observables: [Infl]
-  para_func: [ kappa, x_bar ]
+  para_func: [kappa, x_bar]
 
 equations:
   model:
@@ -23,17 +23,18 @@ equations:
     - y = y(+1) - (r - Pi(+1)) - u
 
     # Demand Shock
-    - u = rho_u * u(-1) + e_u
+    - u = rho_u*u(-1) + e_u
 
+    # Interest rate rule
     - rn = phi_pi*Pi
 
   constraint:
-    # Monetary Policy
+    # Monetary Policy: r = max(rn, x_bar)
     - r = rn
 
   observables:
     # Observed inflation
-    Infl : Pi + pi_mean
+    Infl: Pi + pi_mean
 
 calibration:
   parameters:
@@ -42,9 +43,7 @@ calibration:
     phi_pi: 1.7
     rho_u: .7
     sig_u: .5
-    rho: .8
-    y_mean: 0.35562565
-    pi_mean: 0.5
+    pi_mean: .5
     elb_level: .07
 
   parafunc:
@@ -59,7 +58,7 @@ estimation:
     ## uniform function take upper & lower as input
     ## for inv_gamma_dynare function see Dynare
     ## all other function take mean & std as input
-    theta : [0.7813,0.5,0.95,beta,0.5,0.10]
-    phi_pi  : [1.7985,1.0,3,normal,1.5,0.25]
-    rho_u   : [.7,.01,.9999,beta,0.5,0.20]
-    sig_u : [0.5,0.025,5,inv_gamma_dynare,0.1,2]
+    theta: [0.7813, 0.5, 0.95, beta, 0.5, 0.10]
+    phi_pi: [1.7985, 1.0, 3, normal, 1.5, 0.25]
+    rho_u: [0.7, 0.01, 0.9999, beta, 0.5, 0.20]
+    sig_u: [0.5, 0.025, 5, inv_gamma_dynare, 0.1, 2]

@@ -1,0 +1,61 @@
+# Minimal New Keynesian model with interest-rate smoothing.
+# Based on minimal_nk.yaml by Gregor Boehl.
+
+declarations:
+  name: 'nk_small_smoothing'
+  variables: [Pi, y, r, rn, u]
+  constrained: [r]
+  parameters: [beta, theta, phi_pi, rho_r, rho_u, sig_u, elb_level, pi_mean]
+  shocks: [e_u]
+  observables: [Infl]
+  para_func: [kappa, x_bar]
+
+equations:
+  model:
+    # Phillips Curve
+    - Pi = beta*Pi(+1) + kappa*y
+
+    # Euler Equation
+    - y = y(+1) - (r - Pi(+1)) - u
+
+    # Demand Shock
+    - u = rho_u*u(-1) + e_u
+
+    # Interest-rate smoothing uses the lagged actual rate, including at the bound.
+    - rn = rho_r*r(-1) + (1-rho_r)*phi_pi*Pi
+
+  constraint:
+    # Monetary Policy: r = max(rn, x_bar)
+    - r = rn
+
+  observables:
+    # Observed inflation
+    Infl: Pi + pi_mean
+
+calibration:
+  parameters:
+    beta: .99
+    theta: .66
+    phi_pi: 1.7
+    rho_r: .8
+    rho_u: .7
+    sig_u: .5
+    pi_mean: .5
+    elb_level: .07
+
+  parafunc:
+    kappa: (1-theta)*(1-beta*theta)/theta
+    x_bar: -1/beta + elb_level
+
+  covariances:
+    e_u: sig_u
+
+estimation:
+  prior:
+    ## uniform function take upper & lower as input
+    ## for inv_gamma_dynare function see Dynare
+    ## all other function take mean & std as input
+    theta: [0.7813, 0.5, 0.95, beta, 0.5, 0.10]
+    phi_pi: [1.7985, 1.0, 3, normal, 1.5, 0.25]
+    rho_u: [0.7, 0.01, 0.9999, beta, 0.5, 0.20]
+    sig_u: [0.5, 0.025, 5, inv_gamma_dynare, 0.1, 2]
