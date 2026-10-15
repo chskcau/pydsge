@@ -6,7 +6,7 @@ import pandas as pd
 from pydsge import DSGE, example
 
 
-def test_estimation(create=False):
+def test_estimation(tmp_path, create=False):
 
     yaml, data = example
     mod = DSGE.read(yaml)
@@ -29,11 +29,30 @@ def test_estimation(create=False):
     # sample pars from prior
     p0 = mod.prior_sampler(22, check_likelihood=False, verbose=True)
 
-    sampler = mod.mcmc(p0, nsteps=20, tune=5, update_freq=0)
+    backend_file = tmp_path / "dfi_sampler.h5"
+    try:
+        mod.mcmc(
+            p0, nsteps=20, tune=5, update_freq=0, backend=str(backend_file)
+        )
+    finally:
+        mod.pool.clear()
     # mod.save()
 
     mod.mcmc_summary()
-    this_sample = mod.sampler.get_chain()[0, 0]
+    chain = mod.sampler.get_chain()
+    log_prob = mod.sampler.get_log_prob()
+    assert backend_file.is_file()
+    assert chain.shape == (20, 22, len(mod.prior))
+    assert log_prob.shape == chain.shape[:2]
+    assert np.isfinite(chain).all()
+    # -inf is allowed for walkers with zero posterior density.
+    assert not np.isnan(log_prob).any()
+    assert not np.isposinf(log_prob).any()
+    assert np.isfinite(log_prob).any(axis=1).all()
+    np.testing.assert_array_equal(
+        mod.get_chain(backend_file=str(backend_file)), chain
+    )
+    this_sample = chain[0, 0]
 
     pth = os.path.dirname(__file__)
     save_path = os.path.join(pth, "resources", "estimation.npz")

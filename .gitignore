@@ -24,3 +24,4 @@ env
 .eggs
 
 pydsge/examples/dfi_sampler.h5
+.pytest_tmp/
