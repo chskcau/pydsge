@@ -90,7 +90,7 @@ calibration:
     nu      : calc_nu(nub) # calc nu is an external function defined in dfi_funcs.py
     x_bar   : -1/beta + elb_level # x_bar *must* be present either as a parameter or parafunc
 
-  covariances:
+  covariances_sqrt:
     e_z: sig_z
     e_u: sig_u
     e_r: sig_r

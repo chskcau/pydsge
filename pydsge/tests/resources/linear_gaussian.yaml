@@ -26,7 +26,7 @@ calibration:
     mean_x: 1.25
     mean_z: -0.8
     x_bar: -5.0
-  covariances:
+  covariances_sqrt:
     e_x: sig_x
     e_z: sig_z
 

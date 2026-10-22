@@ -124,6 +124,8 @@ def create_filter(
     # use lyapunov equation as default. Otherwise to be defined manually via `*.filter.p`
     f.init_cov = None
 
+    # QQ currently contains diagonal standard deviations. Keep matrix squaring;
+    # see parser._get_shock_scales for the unresolved off-diagonal semantics.
     try:
         f.Q = self.QQ(self.ppar) @ self.QQ(self.ppar)
     except AttributeError:

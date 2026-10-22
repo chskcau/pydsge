@@ -7,6 +7,7 @@ import itertools
 import sympy
 import time
 import sys
+import warnings
 import numpy as np
 import scipy.stats as sst
 import scipy.optimize as sso
@@ -17,6 +18,40 @@ from .clsmethods import Model
 from .symbols import Variable, Equation, Shock, Parameter, TSymbol
 from .utils import _dumper
 from sympy.matrices import Matrix, zeros
+
+
+def _get_shock_scales(calibration):
+    keys = [key for key in ("covariances_sqrt", "covariances") if key in calibration]
+    if len(keys) == 2:
+        raise ValueError(
+            "Specify only one of 'covariances_sqrt' and 'covariances', not both."
+        )
+    if not keys:
+        raise ValueError("Missing 'covariances_sqrt' section in calibration.")
+    key = keys[0]
+    if key == "covariances":
+        warnings.warn(
+            "The name 'covariances' is misleading: entries are shock standard "
+            "deviations, not variances. Use 'covariances_sqrt' instead; "
+            "the numerical meaning of the entries is unchanged.",
+            UserWarning,
+            stacklevel=3,
+        )
+    scales = calibration[key]
+    if not isinstance(scales, dict):
+        raise ValueError(f"'{key}' must map shock names to standard deviations.")
+    for shock in scales:
+        if "," in str(shock):
+            # TODO: Clarify off-diagonal semantics. Signed elementwise covariance
+            # roots would be a meaningful convention, but would require signed
+            # elementwise squaring, not QQ @ QQ, and a PSD covariance check.
+            # Preserve the historical matrix product until this is resolved.
+            raise NotImplementedError(
+                f"Off-diagonal shock entries are not supported: '{shock}'. "
+                "Use one shock name per entry; only independent innovations "
+                "with diagonal standard deviations are currently supported."
+            )
+    return scales
 
 
 def crawl_cached_models(mtxt, ftxt):
@@ -478,8 +513,24 @@ class DSGE(Model):
         self.bb = bb
         self.bb_PSI = bb_PSI
 
-        QQ = lambdify([self.parameters + self["other_para"]],
-                      self["covariance"])
+        qq_function = lambdify([self.parameters + self["other_para"]],
+                               self["covariance"])
+        shock_names = self.shocks
+
+        def QQ(parameters):
+            matrix = qq_function(parameters)
+            scales = np.diag(matrix)
+            invalid = ~np.isfinite(scales) | (scales < 0)
+            if np.any(invalid):
+                names = ", ".join(
+                    name for name, bad in zip(shock_names, invalid) if bad
+                )
+                raise ValueError(
+                    "Shock standard deviations must be finite and non-negative; "
+                    f"invalid values for: {names}."
+                )
+            return matrix
+
         HH = lambdify(
             [self.parameters + self["other_para"]], self["measurement_errors"]
         )
@@ -529,6 +580,7 @@ class DSGE(Model):
         processed_raw_model = crawl_cached_models(mtxt, ftxt)
 
         if processed_raw_model is not None and not nocache:
+            _get_shock_scales(processed_raw_model["__data__"]["calibration"])
             if verbose:
                 print("[DSGE:]".ljust(15, " ") + " Model is already parsed, reusing parsed model")
             pmodel = deepcopy(processed_raw_model)
@@ -684,6 +736,7 @@ class DSGE(Model):
 
         dec = model_yaml["declarations"]
         cal = model_yaml["calibration"]
+        cov = _get_shock_scales(cal)
 
         name = dec["name"]
         if "description" in dec:
@@ -701,7 +754,7 @@ class DSGE(Model):
 
         var_ordering = [Variable(v) for v in dec["variables"]]
         par_ordering = [Parameter(v) for v in cal["parameters"]]
-        shk_ordering = [Shock(v) for v in cal["covariances"]]
+        shk_ordering = [Shock(v) for v in cov]
 
         if "parafunc" in cal:
             other_para = [Parameter(v) for v in cal["parafunc"]]
@@ -895,8 +948,6 @@ class DSGE(Model):
 
         equations = [eq.subs(subs_dict) for eq in equations]
 
-        cov = cal["covariances"]
-
         nshock = len(shk_ordering)
         npara = len(par_ordering)
 
@@ -982,6 +1033,7 @@ class DSGE(Model):
         model.get_matrices()
 
         model.par_fix = np.array(model.p0())
+        model.QQ(model.pcompile(model.par_fix))
         p_names = [p.name for p in model.parameters]
 
         try:

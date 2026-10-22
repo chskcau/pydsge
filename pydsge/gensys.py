@@ -120,6 +120,8 @@ def gen_sys_from_yaml(
             + " (maybe one (or several) parameter is a function of other parameters, and should be declared in `parafunc`?)"
         ).with_traceback(sys.exc_info()[2])
 
+    self.QQ(self.ppar)  # Validate shock scales also when no filter exists yet.
+
     if not self.const_var:
         raise NotImplementedError("Package is only meant to work with OBCs")
 

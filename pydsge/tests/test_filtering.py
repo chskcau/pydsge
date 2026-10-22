@@ -137,6 +137,13 @@ def test_linear_gaussian_likelihood(linear_gaussian_model, parameters):
         np.testing.assert_allclose(mod.get_ll(), expected_ll, rtol=1e-10, atol=1e-12)
 
 
+def test_filter_rejects_negative_shock_scale(linear_gaussian_model):
+    mod, _ = linear_gaussian_model
+    assert np.isneginf(mod.lprob(np.array([0.6, -0.4])))
+    with pytest.raises(ValueError, match="non-negative.*e_x"):
+        mod.set_par("sig_x", -0.4, verbose=False)
+
+
 @pytest.fixture(params=[True, False], ids=["reduced", "full"])
 def ensemble_model(request):
     mod = _load_gaussian_model()

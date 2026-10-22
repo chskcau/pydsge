@@ -80,6 +80,21 @@ The parser originally was a fork of Ed Herbst's fork from Pablo Winant's (excell
 
 See https://github.com/EconForge/dolo and https://github.com/eph.
 
+Specify shock standard deviations under ``calibration.covariances_sqrt``:
+
+.. code-block:: yaml
+
+   calibration:
+     covariances_sqrt:
+       e_u: sig_u
+       e_z: sig_z
+
+Only independent innovations are currently supported: each entry is a finite,
+non-negative standard deviation, not a variance. Off-diagonal entries raise
+``NotImplementedError``. The legacy name ``covariances`` retains the same
+numerical meaning but emits a warning because the name is misleading. Specifying
+both section names raises ``ValueError``.
+
 
 References
 ----------

@@ -83,3 +83,81 @@ def test_observation_equation_rejects_leads_and_lags(dates):
     for date in dates:
         assert f"Pi({date})" in str(error.value)
     assert "auxiliary variables" in str(error.value)
+
+
+@pytest.fixture
+def gaussian_source():
+    filename = Path(__file__).parent / "resources" / "linear_gaussian.yaml"
+    return filename.read_text(encoding="utf-8")
+
+
+@pytest.mark.parametrize("section", ["covariances_sqrt", "covariances"])
+def test_shock_scale_section(gaussian_source, section, recwarn):
+    source = gaussian_source.replace("covariances_sqrt:", f"{section}:")
+    mod = DSGE.parse(source, "", verbose=False)
+    scales = mod.QQ(mod.pcompile(mod.p0()))
+
+    assert mod.shocks == ["e_x", "e_z"]
+    np.testing.assert_array_equal(scales, np.diag([0.4, 0.7]))
+    if section == "covariances":
+        warning = recwarn.pop(UserWarning)
+        assert "misleading" in str(warning.message)
+        assert "covariances_sqrt" in str(warning.message)
+    assert not recwarn
+
+
+def test_conflicting_shock_scale_sections(gaussian_source):
+    source = gaussian_source.replace(
+        "  covariances_sqrt:\n",
+        "  covariances:\n    e_x: sig_x\n    e_z: sig_z\n  covariances_sqrt:\n",
+    )
+    with pytest.raises(ValueError, match="only one.*not both"):
+        DSGE.parse(source, "", verbose=False)
+
+
+@pytest.mark.parametrize("section", ["covariances_sqrt", "covariances"])
+@pytest.mark.parametrize("value", [-0.1, 0.0, 0.1])
+def test_off_diagonal_shock_entries(gaussian_source, section, value, recwarn):
+    source = gaussian_source.replace("covariances_sqrt:", f"{section}:")
+    source = source.replace("    e_z: sig_z", f"    e_z: sig_z\n    e_x,e_z: {value}")
+    with pytest.raises(NotImplementedError, match="Off-diagonal.*e_x,e_z"):
+        DSGE.parse(source, "", verbose=False)
+
+
+@pytest.mark.parametrize("expression", ["-0.4", "-sig_x"])
+def test_negative_shock_standard_deviation(gaussian_source, expression):
+    source = gaussian_source.replace("e_x: sig_x", f"e_x: {expression}")
+    with pytest.raises(ValueError, match="non-negative.*e_x"):
+        DSGE.parse(source, "", verbose=False)
+
+
+@pytest.mark.parametrize("value", ["-0.4", ".nan", ".inf"])
+def test_invalid_calibrated_shock_scale(gaussian_source, value):
+    source = gaussian_source.replace("sig_x: 0.4", f"sig_x: {value}")
+    with pytest.raises(ValueError, match="finite and non-negative.*e_x"):
+        DSGE.parse(source, "", verbose=False)
+
+
+def test_zero_shock_standard_deviation(gaussian_source):
+    source = gaussian_source.replace("sig_x: 0.4", "sig_x: 0.0")
+    mod = DSGE.parse(source, "", verbose=False)
+    scales = mod.QQ(mod.pcompile(mod.p0()))
+    np.testing.assert_array_equal(scales, np.diag([0.0, 0.7]))
+
+
+def test_negative_shock_scale_after_parameter_change(gaussian_source):
+    mod = DSGE.parse(gaussian_source, "", verbose=False)
+    parameters = np.array(mod.p0())
+    parameters[mod.par_names.index("sig_x")] = -0.4
+    with pytest.raises(ValueError, match="non-negative.*e_x"):
+        mod.set_par(parameters, l_max=2, k_max=4, verbose=False)
+
+
+def test_legacy_shock_scale_warning_with_cached_model(gaussian_source, tmp_path):
+    filename = tmp_path / "legacy.yaml"
+    filename.write_text(
+        gaussian_source.replace("covariances_sqrt:", "covariances:"), encoding="utf-8"
+    )
+    for _ in range(2):
+        with pytest.warns(UserWarning, match="misleading.*standard deviations"):
+            DSGE.read(str(filename))
