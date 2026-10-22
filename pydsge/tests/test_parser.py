@@ -1,5 +1,8 @@
 """This file contains tests for the parsing of the model."""
+from pathlib import Path
+
 import numpy as np
+import pytest
 
 from pydsge import DSGE
 from pydsge import example
@@ -59,3 +62,24 @@ def test_parsing_yaml():
     )
     assert mod.shocks == ["e_z", "e_u", "e_r"]
     assert mod.observables == ["GDP", "Infl", "FFR"]
+
+
+@pytest.mark.parametrize(
+    "dates",
+    [(-1,), (-2,), (1,), (2,), (-1, 1)],
+    ids=["lag", "second-lag", "lead", "second-lead", "lag-and-lead"],
+)
+def test_observation_equation_rejects_leads_and_lags(dates):
+    filename = Path(__file__).parents[1] / "examples" / "minimal_nk.yaml"
+    source = filename.read_text(encoding="utf-8")
+    expression = "Pi + pi_mean" + "".join(f" + Pi({date})" for date in dates)
+    source = source.replace("Infl: Pi + pi_mean", f"Infl: {expression}")
+
+    with pytest.raises(
+        NotImplementedError, match="Leads and lags.*observation equation 'Infl'"
+    ) as error:
+        DSGE.parse(source, "", verbose=False)
+
+    for date in dates:
+        assert f"Pi({date})" in str(error.value)
+    assert "auxiliary variables" in str(error.value)

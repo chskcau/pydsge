@@ -342,9 +342,20 @@ class DSGE(Model):
         eq_i = 0
         for obs in self["observables"]:
             eq = self["obs_equations"][str(obs)]
+            obs_vars = eq.atoms(Variable)
+            noncurrent_vars = sorted(
+                (v for v in obs_vars if v.date != 0), key=str
+            )
+            if noncurrent_vars:
+                names = ", ".join(str(v) for v in noncurrent_vars)
+                raise NotImplementedError(
+                    f"Leads and lags are not supported in observation equation '{obs}': {names}. "
+                    "Define auxiliary variables in the model block and use their current "
+                    "values in the observation equation."
+                )
             ZZ1[eq_i, 0] = eq.subs(subs_dict)
 
-            curr_var = filter(lambda x: x.date >= 0, eq.atoms(Variable))
+            curr_var = filter(lambda x: x.date == 0, obs_vars)
 
             for v in curr_var:
                 v_j = vlist.index(v)
