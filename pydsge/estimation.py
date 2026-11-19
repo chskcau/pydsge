@@ -8,6 +8,7 @@ import pathos
 import time
 import tqdm
 from emcwrap import get_prior
+from .exceptions import InvalidProposalError
 from .filtering import get_ll
 from .mpile import get_par, set_par
 
@@ -29,6 +30,10 @@ def prep_estim(
     **filterargs
 ):
     """Initializes the tools necessary for estimation
+
+    During sampling, a zero prior density or an InvalidProposalError from
+    the model yields a log posterior of minus infinity. Other exceptions
+    propagate to the caller.
 
     ...
 
@@ -150,9 +155,9 @@ def prep_estim(
     def llike(parameters, par_fix, linear, verbose, seed):
 
         random_state = np.random.get_state()
-        with warnings.catch_warnings(record=True):
+        with warnings.catch_warnings():
             try:
-                warnings.filterwarnings("error")
+                warnings.simplefilter("error", RuntimeWarning)
 
                 np.random.seed(seed)
 
@@ -167,10 +172,7 @@ def prep_estim(
 
                 return get_ll(self, verbose=verbose > 2, dispatch=dispatch)
 
-            except MemoryError:
-                raise
-
-            except Exception as err:
+            except InvalidProposalError as err:
                 if verbose:
                     print("[llike:]".ljust(15, " ") +
                           " Failure. Error msg: %s" % err)
@@ -193,10 +195,12 @@ def prep_estim(
 
         lp = lprior(par)
 
-        if np.isinf(lp):
+        if np.isneginf(lp):
             if verbose:
                 print("[lprob:]".ljust(15, " ") + " prior is -inf.")
             return lp
+        if not np.isfinite(lp):
+            raise FloatingPointError(f"Invalid log prior: {lp}.")
 
         if linear is None:
             linear = linear_pa
@@ -206,10 +210,12 @@ def prep_estim(
 
         ll = llike(par, par_fix, linear, verbose, seed) * temp if temp else 0
 
-        if np.isinf(ll):
+        if np.isneginf(ll):
             return ll
 
         ll += lp
+        if not np.isfinite(ll):
+            raise FloatingPointError(f"Invalid log posterior: {ll}.")
 
         if verbose and verbose < 3:
             print(

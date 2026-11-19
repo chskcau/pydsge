@@ -6,7 +6,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from pydsge import DSGE
+from pydsge import DSGE, InvalidProposalError
 
 
 def _state_mapping(mod, reduced_form=False):
@@ -140,25 +140,26 @@ def test_linear_gaussian_likelihood(linear_gaussian_model, parameters):
 def test_filter_rejects_negative_shock_scale(linear_gaussian_model):
     mod, _ = linear_gaussian_model
     assert np.isneginf(mod.lprob(np.array([0.6, -0.4])))
-    with pytest.raises(ValueError, match="non-negative.*e_x"):
+    with pytest.raises(InvalidProposalError, match="non-negative.*e_x"):
         mod.set_par("sig_x", -0.4, verbose=False)
 
 
-def test_filter_memory_error_propagates(linear_gaussian_model, monkeypatch):
+@pytest.mark.parametrize("error_type", [MemoryError, OSError, AttributeError, ValueError, RuntimeWarning])
+def test_unexpected_filter_error_propagates(linear_gaussian_model, monkeypatch, error_type):
     mod, _ = linear_gaussian_model
     valid = np.array([0.6, 0.4])
     reference = mod.lprob(valid)
     assert np.isfinite(reference)
-    error = MemoryError("simulated filter allocation failure")
+    error = error_type("simulated filter failure")
 
-    def fail_allocation(*args, **kwargs):
+    def fail_filter(*args, **kwargs):
         np.random.random()
         raise error
 
     previous_rng = np.random.get_state()
     with monkeypatch.context() as patch:
-        patch.setattr(mod.filter, "batch_filter", fail_allocation)
-        with pytest.raises(MemoryError) as raised:
+        patch.setattr(mod.filter, "batch_filter", fail_filter)
+        with pytest.raises(error_type) as raised:
             mod.lprob(valid)
     assert raised.value is error
     np.testing.assert_equal(np.random.get_state(), previous_rng)
@@ -180,8 +181,31 @@ def test_estimation_rejects_invalid_proposals(monkeypatch):
     assert np.isneginf(mod.lprior(outside_prior))
     assert np.isneginf(mod.lprob(outside_prior))
     assert np.isfinite(mod.lprior(explosive))
+    with pytest.raises(InvalidProposalError, match="B-K condition"):
+        mod.set_par("rho_x", explosive[0], verbose=False)
     assert np.isneginf(mod.lprob(explosive))
     assert mod.lprob(valid) == reference
+
+
+def test_positive_constraint_bound_stops_estimation(linear_gaussian_model):
+    mod, _ = linear_gaussian_model
+    parameters = mod.par_fix.copy()
+    parameters[list(map(str, mod.parameters)).index("x_bar")] = 0.1
+    with pytest.raises(NotImplementedError, match="x_bar"):
+        mod.lprob(np.array([0.6, 0.4]), par_fix=parameters)
+
+
+def test_unclassified_klein_failure_propagates(linear_gaussian_model, monkeypatch):
+    mod, _ = linear_gaussian_model
+    error = ValueError("Numerical errors in QZ")
+
+    def fail_solver(*args, **kwargs):
+        raise error
+
+    monkeypatch.setattr("pydsge.gensys.klein", fail_solver)
+    with pytest.raises(ValueError) as raised:
+        mod.lprob(np.array([0.6, 0.4]))
+    assert raised.value is error
 
 
 @pytest.fixture(params=[True, False], ids=["reduced", "full"])
@@ -316,9 +340,19 @@ def test_ensemble_filter_likelihood_updates(ensemble_model, monkeypatch):
     assert len(calls) == 2
 
 
-def test_ensemble_filter_invalid_likelihood(ensemble_model, monkeypatch):
+@pytest.mark.parametrize("likelihood", [np.nan, np.inf])
+def test_ensemble_filter_invalid_likelihood(ensemble_model, monkeypatch, likelihood):
     mod = ensemble_model
-    _record_filter_calls(mod, monkeypatch, likelihood=np.nan)
+    _record_filter_calls(mod, monkeypatch, likelihood=likelihood)
+    with pytest.raises(FloatingPointError, match="log likelihood"):
+        mod.get_ll()
+    with pytest.raises(FloatingPointError, match="log likelihood"):
+        mod.lprob(np.array([0.6, 0.4]))
+
+
+def test_zero_likelihood_rejects_proposal(ensemble_model, monkeypatch):
+    mod = ensemble_model
+    _record_filter_calls(mod, monkeypatch, likelihood=-np.inf)
     assert np.isneginf(mod.get_ll())
     assert np.isneginf(mod.ll)
     assert np.isneginf(mod.lprob(np.array([0.6, 0.4])))

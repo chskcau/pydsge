@@ -10,6 +10,7 @@ import scipy.linalg as sl
 import cloudpickle as cpickle
 from grgrlib import fast0, ouc, klein, speed_kills
 from .engine import preprocess
+from .exceptions import InvalidProposalError
 from .clsmethods import Model
 from .parser import DSGE
 
@@ -369,8 +370,13 @@ def gen_sys(
         if solution == "speed_kills":
             omg, lam = speed_kills(PU, MU, dimp, dimq, tol=1e-4)
         else:
-            omg, lam = klein(PU, MU, nstates=dimq,
-                             verbose=verbose, force=False)
+            try:
+                omg, lam = klein(PU, MU, nstates=dimq, verbose=verbose, force=False)
+            except ValueError as exc:
+                # grgrlib.klein reports the Blanchard-Kahn condition as a plain ValueError.
+                if str(exc).startswith("B-K condition not satisfied:"):
+                    raise InvalidProposalError(str(exc)) from exc
+                raise
     else:
         omg, lam = solution
 

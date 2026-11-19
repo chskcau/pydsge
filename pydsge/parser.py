@@ -15,6 +15,7 @@ import cloudpickle as cpickle
 from sys import platform
 from copy import deepcopy
 from .clsmethods import Model
+from .exceptions import InvalidProposalError
 from .symbols import Variable, Equation, Shock, Parameter, TSymbol
 from .utils import _dumper
 from sympy.matrices import Matrix, zeros
@@ -525,7 +526,7 @@ class DSGE(Model):
                 names = ", ".join(
                     name for name, bad in zip(shock_names, invalid) if bad
                 )
-                raise ValueError(
+                raise InvalidProposalError(
                     "Shock standard deviations must be finite and non-negative; "
                     f"invalid values for: {names}."
                 )

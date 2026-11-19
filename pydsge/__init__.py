@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 
 from .stats import sort_nhd
+from .exceptions import InvalidProposalError
 from .gensys import DSGE, gen_sys_from_dict
 from .__version__ import __version__
 import numpy as np

@@ -126,10 +126,8 @@ def create_filter(
 
     # QQ currently contains diagonal standard deviations. Keep matrix squaring;
     # see parser._get_shock_scales for the unresolved off-diagonal semantics.
-    try:
-        f.Q = self.QQ(self.ppar) @ self.QQ(self.ppar)
-    except AttributeError:
-        f.Q = self.fdict["QQ"] @ self.fdict["QQ"]
+    scales = self.QQ(self.ppar) if hasattr(self, "QQ") else self.fdict["QQ"]
+    f.Q = scales @ scales
     self.filter = f
 
     return f
@@ -292,8 +290,8 @@ def run_filter(
             res = self.filter.rts_smoother(res, rcond=rcond)
 
     if get_ll:
-        if np.isnan(res):
-            res = -np.inf
+        if np.isnan(res) or np.isposinf(res):
+            raise FloatingPointError(f"Filter returned an invalid log likelihood: {res}.")
         self.ll = res
     else:
         self.X = res
