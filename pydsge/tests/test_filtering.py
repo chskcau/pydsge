@@ -144,6 +144,46 @@ def test_filter_rejects_negative_shock_scale(linear_gaussian_model):
         mod.set_par("sig_x", -0.4, verbose=False)
 
 
+def test_filter_memory_error_propagates(linear_gaussian_model, monkeypatch):
+    mod, _ = linear_gaussian_model
+    valid = np.array([0.6, 0.4])
+    reference = mod.lprob(valid)
+    assert np.isfinite(reference)
+    error = MemoryError("simulated filter allocation failure")
+
+    def fail_allocation(*args, **kwargs):
+        np.random.random()
+        raise error
+
+    previous_rng = np.random.get_state()
+    with monkeypatch.context() as patch:
+        patch.setattr(mod.filter, "batch_filter", fail_allocation)
+        with pytest.raises(MemoryError) as raised:
+            mod.lprob(valid)
+    assert raised.value is error
+    np.testing.assert_equal(np.random.get_state(), previous_rng)
+    assert mod.lprob(valid) == reference
+
+
+def test_estimation_rejects_invalid_proposals(monkeypatch):
+    mod = _load_gaussian_model()
+    # Put explosive AR coefficients inside the prior to exercise the solver rejection.
+    monkeypatch.setitem(mod.prior, "rho_x", [0.6, -0.95, 1.5, "normal", 0.6, 0.1])
+    monkeypatch.setitem(mod.prior, "sig_x", [0.4, 0.05, 1.0, "gamma", 0.4, 0.1])
+    mod.prep_estim(linear=True, ncores=0, seed=0, dry_run=False, verbose=False)
+    valid = np.array([0.6, 0.4])
+    reference = mod.lprob(valid)
+    assert np.isfinite(reference)
+
+    outside_prior = np.array([0.6, -10.0])
+    explosive = np.array([1.2, 0.4])
+    assert np.isneginf(mod.lprior(outside_prior))
+    assert np.isneginf(mod.lprob(outside_prior))
+    assert np.isfinite(mod.lprior(explosive))
+    assert np.isneginf(mod.lprob(explosive))
+    assert mod.lprob(valid) == reference
+
+
 @pytest.fixture(params=[True, False], ids=["reduced", "full"])
 def ensemble_model(request):
     mod = _load_gaussian_model()

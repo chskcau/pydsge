@@ -165,12 +165,9 @@ def prep_estim(
                 )
                 self.filter.Q = self.QQ(self.ppar) @ self.QQ(self.ppar)
 
-                ll = get_ll(self, verbose=verbose > 2, dispatch=dispatch)
+                return get_ll(self, verbose=verbose > 2, dispatch=dispatch)
 
-                np.random.set_state(random_state)
-                return ll
-
-            except KeyboardInterrupt:
+            except MemoryError:
                 raise
 
             except Exception as err:
@@ -182,8 +179,9 @@ def prep_estim(
                         print(pardict)
                         self.box_check([*pardict.values()])
 
-                np.random.set_state(random_state)
                 return -np.inf
+            finally:
+                np.random.set_state(random_state)
 
     linear_pa = linear
 
