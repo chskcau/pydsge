@@ -85,7 +85,8 @@ def t_func(
         shocks,
         set_l,
         set_k,
-        get_obs
+        get_obs,
+        getattr(self, "regime_available", None),
     )
 
     newstate = (q, pobs) if get_obs else np.hstack((pobs, q))
@@ -505,7 +506,7 @@ def traj(self, state, l=None, k=None, verbose=True):
 
         omg, lam, x_bar = self.sys
         pmat, qmat, pterm, qterm, bmat, bterm = self.precalc_mat
-        l, k, flag = find_lk(bmat, bterm, x_bar, state)
+        l, k, flag = find_lk(bmat, bterm, x_bar, state, getattr(self, "regime_available", None))
 
         if verbose:
             if flag == 0:
@@ -527,6 +528,7 @@ def traj(self, state, l=None, k=None, verbose=True):
 
     tmat, tterm = self.precalc_tmat
 
+    require_regime(getattr(self, "regime_available", None), l, k - 1)
     return tmat[:, l, k - 1] @ state + tterm[:, l, k - 1]
 
 
@@ -536,7 +538,7 @@ def k_map(self, state, l=None, k=None, verbose=True):
 
     if k is None:
         pmat, qmat, pterm, qterm, bmat, bterm = self.precalc_mat
-        l_endo, k, flag = find_lk(bmat, bterm, x_bar, state)
+        l_endo, k, flag = find_lk(bmat, bterm, x_bar, state, getattr(self, "regime_available", None))
 
         l = l or l_endo
 
@@ -563,6 +565,12 @@ def k_map(self, state, l=None, k=None, verbose=True):
     l_max, k_max = self.lks
     tmat, tterm = self.precalc_tmat
 
+    available = getattr(self, "regime_available", None)
+    if available is not None:
+        for i in range(l_max):
+            require_regime(available, i, k)
+        for i in range(k_max):
+            require_regime(available, l, i)
     LS = np.array(
         [tmat[i + k, i, k] @ state + tterm[i + k, i, k] for i in range(l_max)]
     )

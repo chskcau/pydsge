@@ -166,6 +166,19 @@ def test_unexpected_filter_error_propagates(linear_gaussian_model, monkeypatch, 
     assert mod.lprob(valid) == reference
 
 
+def test_unclassified_linalg_failure_preserves_cause(linear_gaussian_model, monkeypatch):
+    mod, _ = linear_gaussian_model
+    error = np.linalg.LinAlgError("decomposition did not converge")
+
+    def fail(*args, **kwargs):
+        raise error
+
+    monkeypatch.setattr(mod.filter, "batch_filter", fail)
+    with pytest.raises(FloatingPointError, match="KalmanFilter.*log likelihood") as caught:
+        mod.lprob(np.array([0.6, 0.4]))
+    assert caught.value.__cause__ is error
+
+
 def test_estimation_rejects_invalid_proposals(monkeypatch):
     mod = _load_gaussian_model()
     # Put explosive AR coefficients inside the prior to exercise the solver rejection.

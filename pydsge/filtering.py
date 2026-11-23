@@ -9,6 +9,7 @@ from econsieve import KalmanFilter, TEnKF
 from grgrlib import timeprint
 from grgrlib.multiprocessing import serializer
 from econsieve.stats import logpdf
+from .engine import require_regime
 
 
 def create_obs_cov(self, scale_obs=0.1):
@@ -22,6 +23,7 @@ def create_obs_cov(self, scale_obs=0.1):
 
 def get_p_init_lyapunov(self, Q):
 
+    require_regime(getattr(self, "regime_available", None), 1, 0)
     pmat = self.precalc_mat[0]
     qmat = self.precalc_mat[1]
 
@@ -41,6 +43,7 @@ def get_p_init_lyapunov(self, Q):
 def get_eps_lin(self, x, xp, rcond=1e-14):
     """Get filter-implied (smoothed) shocks for linear model"""
 
+    require_regime(getattr(self, "regime_available", None), 1, 0)
     qmat = self.precalc_mat[1]
 
     if self.filter.name == "KalmanFilter":
@@ -134,7 +137,12 @@ def create_filter(
 
 
 def get_ll(self, **args):
-    return run_filter(self, smoother=False, get_ll=True, **args)
+    try:
+        return run_filter(self, smoother=False, get_ll=True, **args)
+    except np.linalg.LinAlgError as exc:
+        raise FloatingPointError(
+            f"{self.filter.name} could not evaluate the log likelihood: {exc}"
+        ) from exc
 
 
 def run_filter(
@@ -169,6 +177,7 @@ def run_filter(
     # assign current transition & observation functions (of parameters)
     if self.filter.name == "KalmanFilter":
 
+        require_regime(getattr(self, "regime_available", None), 1, 0)
         pmat = self.precalc_mat[0]
         qmat = self.precalc_mat[1]
 
@@ -215,6 +224,7 @@ def run_filter(
         self.filter.o_func = None
 
         if self.filter.init_cov is None:
+            require_regime(getattr(self, "regime_available", None), 1, 0)
             qmat = self.precalc_mat[1]
             F = qmat[1, 0][: -self.neps, : -self.neps]
             E = qmat[1, 0][: -self.neps, -self.neps:]
@@ -357,7 +367,7 @@ def extract(
     fname = self.filter.name
     verbose = max(verbose, debug)
 
-    if hasattr(self, "pool"):
+    if getattr(self, "pool", None) is not None:
         from .estimation import create_pool
 
         create_pool(self)
@@ -429,9 +439,10 @@ def extract(
 
             return par, res[0], resid, 0
 
-        np.random.shuffle(res)
         sample = np.dstack((obs_func(res), res[..., dimp:]))
-        inits = res[:, 0, :]
+        # Pair each target with its own initial state. Choose the member from
+        # a local stream so the path does not depend on worker scheduling.
+        members = np.random.default_rng(seed_loc).permutation(len(res))
 
         def t_func_loc(states, eps):
 
@@ -440,20 +451,24 @@ def extract(
             return np.hstack((pobs, q)), flag
 
         for natt in range(nattemps):
+            member = members[natt % len(members)]
             try:
                 init, resid, flags = npas(
                     func=t_func_loc,
-                    X=sample,
-                    init_states=inits,
+                    X=np.roll(sample, -int(member), axis=0),
+                    init_states=res[[member], 0, :],
                     verbose=max(len(sample) == 1, verbose - 1),
-                    seed=seed_loc,
+                    seed=(int(seed_loc) + natt) % 2**32,
                     nsamples=1,
                     **npasargs
                 )
 
                 return par, init, resid[0], flags
 
-            except Exception as e:
+            except ValueError as e:
+                # CMA-ES can draw an entire population of infeasible shocks.
+                if str(e) != "Sample returns infs only.":
+                    raise
                 raised_error = e
 
         if accept_failure:
@@ -464,12 +479,9 @@ def extract(
             )
             return None
         else:
-            import sys
-
-            raise type(raised_error)(
-                str(raised_error) +
-                " (after %s unsuccessful attemps)." % (natt + 1)
-            ).with_traceback(sys.exc_info()[2])
+            raise ValueError(
+                f"No feasible shock path found after {natt + 1} attempts: {raised_error}"
+            ) from raised_error
 
     wrap = tqdm.tqdm if (verbose and len(sample) >
                          1) else (lambda x, **kwarg: x)

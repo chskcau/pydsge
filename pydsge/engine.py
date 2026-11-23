@@ -5,6 +5,9 @@ import numpy.linalg as nl
 import time
 import sys
 from numba import njit, prange
+from numba.extending import register_jitable
+
+from .exceptions import UnresolvedRegimeError
 
 aca = np.ascontiguousarray
 si_eps = sys.float_info.epsilon
@@ -42,8 +45,8 @@ def get_omg(omg, psi, lam, xi, S, T, V, W, h, l):
     return omg, psi
 
 
-def preprocess_jittable(S, T, V, W, h, fq1, fp1, fq0, omg, lam, x_bar, l_max, k_max):
-    """jitted preprocessing of system matrices until (l_max, k_max)"""
+@njit(cache=True)
+def _initialize_grid(S, T, V, W, h, omg, lam, l_max, k_max):
 
     dimp, dimq = omg.shape
     l_max += 1
@@ -75,38 +78,63 @@ def preprocess_jittable(S, T, V, W, h, fq1, fp1, fq0, omg, lam, x_bar, l_max, k_
     pterm[0, 0] = np.zeros(dimp)
     qmat[0, 0] = lam
     qterm[0, 0] = np.zeros(dimq)
+    return pmat, qmat, pterm, qterm
 
-    for l in range(0, l_max):
-        for k in range(0, k_max):
 
-            if k or l:
+@njit(cache=True)
+def _fill_cell(system, policy, l, k, prev_l, prev_k):
+    S, T, V, W, h = system
+    pmat, qmat, pterm, qterm = policy
+    omg, psi = pmat[prev_l, prev_k], pterm[prev_l, prev_k]
+    qmat[l, k], qterm[l, k] = get_lam(omg, psi, S, T, V, W, h, l)
+    pmat[l, k], pterm[l, k] = get_omg(
+        omg, psi, qmat[l, k], qterm[l, k], S, T, V, W, h, l
+    )
 
-                l_last = max(l - 1, 0)
-                k_last = k if l else max(k - 1, 0)
 
-                qmat[l, k], qterm[l, k] = get_lam(
-                    pmat[l_last, k_last], pterm[l_last,
-                                                k_last], S, T, V, W, h, l
-                )
-                pmat[l, k], pterm[l, k] = get_omg(
-                    pmat[l_last, k_last],
-                    pterm[l_last, k_last],
-                    qmat[l, k],
-                    qterm[l, k],
-                    S,
-                    T,
-                    V,
-                    W,
-                    h,
-                    l,
-                )
+@njit(cache=True)
+def _fill_grid(system, policy):
+    for l in range(policy[0].shape[0]):
+        for k in range(policy[0].shape[1]):
+            if l or k:
+                _fill_cell(system, policy, l, k, max(l - 1, 0), k if l else k - 1)
 
+
+def _recover_grid(system, policy):
+    """Recompute independent cells after a singular regime inversion."""
+    available = np.ones(policy[0].shape[:2], dtype=bool)
+    for l, k in np.ndindex(available.shape):
+        if l == k == 0:
+            continue
+        prev_l, prev_k = max(l - 1, 0), k if l else k - 1
+        if available[prev_l, prev_k]:
+            try:
+                _fill_cell(system, policy, l, k, prev_l, prev_k)
+            except nl.LinAlgError as exc:
+                if not _singular_inversion(exc):
+                    raise
+            else:
+                if all(np.isfinite(matrix[l, k]).all() for matrix in policy):
+                    continue
+        available[l, k] = False
+        for matrix in policy:
+            matrix[l, k] = np.nan
+    return available
+
+
+def _singular_inversion(exc):
+    return str(exc) in ("Matrix is singular to machine precision.", "Singular matrix")
+
+
+@register_jitable(inline="always")
+def _constraint_grid(policy, fq1, fp1, fq0):
+    pmat, qmat, pterm, qterm = policy
+    l_max, k_max, dimq = qterm.shape
     bmat = np.empty((5, l_max, k_max, dimq))
     bterm = np.empty((5, l_max, k_max))
 
     for l in range(0, l_max):
         for k in prange(0, k_max):
-
             # initialize local lam, xi to iterate upon
             lam = np.eye(dimq)
             xi = np.zeros(dimq)
@@ -138,13 +166,21 @@ def preprocess_jittable(S, T, V, W, h, fq1, fp1, fq0, omg, lam, x_bar, l_max, k_
                 lam = qmat[l_loc, k_loc] @ lam
                 xi = qmat[l_loc, k_loc] @ xi + qterm[l_loc, k_loc]
 
-    return pmat, qmat, pterm, qterm, bmat, bterm
+    return bmat, bterm
+
+
+def preprocess_jittable(S, T, V, W, h, fq1, fp1, fq0, omg, lam, x_bar, l_max, k_max):
+    policy = _initialize_grid(S, T, V, W, h, omg, lam, l_max, k_max)
+    _fill_grid((S, T, V, W, h), policy)
+    return policy + _constraint_grid(policy, fq1, fp1, fq0)
 
 
 preprocess_jit = njit(preprocess_jittable, cache=True, nogil=True)
 preprocess_jit_parallel = njit(
     preprocess_jittable, cache=True, nogil=True, parallel=True
 )
+_partial_bounds = njit(_constraint_grid, cache=True, nogil=True)
+_partial_bounds_parallel = njit(_constraint_grid, cache=True, nogil=True, parallel=True)
 
 
 @njit(cache=True, nogil=True, parallel=True)
@@ -189,9 +225,27 @@ def preprocess(self, PU, MU, PR, MR, gg, fq1, fp1, fq0, parallel=False, verbose=
 
     st = time.time()
     preprocess_jit_loc = preprocess_jit_parallel if parallel else preprocess_jit
-    self.precalc_mat = preprocess_jit_loc(
-        PU, MU, PR, MR, gg, fq1, fp1, fq0, omg, lam, x_bar, l_max, k_max
-    )
+    system = PU, MU, PR, MR, gg
+    available = None
+    try:
+        # Normalization in the compiled kernel is in-place. Retain the inputs
+        # so that a failed recursion can be replayed cell by cell.
+        matrices = preprocess_jit_loc(
+            *(a.copy(order="K") for a in system), fq1, fp1, fq0, omg, lam, x_bar, l_max, k_max
+        )
+    except nl.LinAlgError as exc:
+        if not _singular_inversion(exc):
+            raise
+        # Singular common blocks still fail here, before any regime can be used.
+        policy = _initialize_grid(*system, omg, lam, l_max, k_max)
+        available = _recover_grid(system, policy)
+        bounds = _partial_bounds_parallel if parallel else _partial_bounds
+        matrices = policy + bounds(policy, fq1, fp1, fq0)
+    partial_grid_changed = available is not None or getattr(self, "regime_available", None) is not None
+    if partial_grid_changed and hasattr(self, "precalc_tmat"):
+        del self.precalc_tmat
+    self.precalc_mat = matrices
+    self.regime_available = available
 
     if verbose:
         print(
@@ -240,6 +294,7 @@ def t_func_jit(
     set_l,
     set_k,
     x_space,
+    available=None,
 ):
     """jitted transitiona function"""
 
@@ -247,10 +302,11 @@ def t_func_jit(
 
     if set_k == -1:
         # find (l,k) if requested
-        l, k, flag = find_lk(bmat, bterm, x_bar, s)
+        l, k, flag = find_lk(bmat, bterm, x_bar, s, available)
     else:
         l, k = set_l, set_k
         flag = 0
+        require_regime(available, l, k)
 
     p = pmat[l, k] @ s + pterm[l, k]
     q = aca(qmat[l, k]) @ s + qterm[l, k]
@@ -265,7 +321,15 @@ def t_func_jit(
 
 
 @njit(nogil=True, cache=True)
-def find_lk(bmat, bterm, x_bar, q):
+def require_regime(available, l, k):
+    if available is None:
+        return
+    if not available[l, k]:
+        raise UnresolvedRegimeError(l, k)
+
+
+@njit(nogil=True, cache=True)
+def find_lk(bmat, bterm, x_bar, q, available=None):
     """iteration loop to find (l,k) given state q"""
 
     _, l_max, k_max = bterm.shape
@@ -274,7 +338,7 @@ def find_lk(bmat, bterm, x_bar, q):
     l, k = 0, 0
 
     # check if (0,0) is a solution
-    while check_cnst(bmat, bterm, 2, l, 0, q) - x_bar > 0:
+    while check_cnst(bmat, bterm, 2, l, 0, q, available) - x_bar > 0:
         l += 1
         if l == l_max:
             break
@@ -282,7 +346,7 @@ def find_lk(bmat, bterm, x_bar, q):
     # check if (0,k) is a solution
     if l < l_max:
         # needs to be wrapped so that both loops can be exited at once
-        l, k = bruite_wrapper(bmat, bterm, x_bar, q)
+        l, k = bruite_wrapper(bmat, bterm, x_bar, q, available)
 
         # if still no solution, use approximation
         if l == 999:
@@ -294,8 +358,8 @@ def find_lk(bmat, bterm, x_bar, q):
                 k += 1
                 if not loop_type:
                     # first iterate until r < r_bar
-                    loop_type = check_cnst(bmat, bterm, 4, 0, k, q) - x_bar < 0
-                elif check_cnst(bmat, bterm, 4, 0, k, q) - x_bar > 0:
+                    loop_type = check_cnst(bmat, bterm, 4, 0, k, q, available) - x_bar < 0
+                elif check_cnst(bmat, bterm, 4, 0, k, q, available) - x_bar > 0:
                     # then iterate until r > r_bar again
                     break
                 if k == k_max - 1:
@@ -309,21 +373,21 @@ def find_lk(bmat, bterm, x_bar, q):
 
 
 @njit(nogil=True, cache=True)
-def bruite_wrapper(bmat, bterm, x_bar, q):
+def bruite_wrapper(bmat, bterm, x_bar, q, available=None):
     """iterate over (l,k) until (l_max, k_max) and check if RE equilibrium"""
     _, l_max, k_max = bterm.shape
 
     for l in range(l_max):
         for k in range(1, k_max):
-            if l and check_cnst(bmat, bterm, 0, l, k, q) - x_bar < 0:
+            if l and check_cnst(bmat, bterm, 0, l, k, q, available) - x_bar < 0:
                 continue
-            if l > 1 and check_cnst(bmat, bterm, 1, l, k, q) - x_bar < 0:
+            if l > 1 and check_cnst(bmat, bterm, 1, l, k, q, available) - x_bar < 0:
                 continue
-            if check_cnst(bmat, bterm, 4, l, k, q) - x_bar < 0:
+            if check_cnst(bmat, bterm, 4, l, k, q, available) - x_bar < 0:
                 continue
-            if check_cnst(bmat, bterm, 2, l, k, q) - x_bar > 0:
+            if check_cnst(bmat, bterm, 2, l, k, q, available) - x_bar > 0:
                 continue
-            if k > 1 and check_cnst(bmat, bterm, 3, l, k, q) - x_bar > 0:
+            if k > 1 and check_cnst(bmat, bterm, 3, l, k, q, available) - x_bar > 0:
                 continue
             return l, k
 
@@ -331,6 +395,10 @@ def bruite_wrapper(bmat, bterm, x_bar, q):
 
 
 @njit(nogil=True, cache=True)
-def check_cnst(bmat, bterm, s, l, k, q0):
+def check_cnst(bmat, bterm, s, l, k, q0, available=None):
     """constraint value in period s given CDR-state q0 under the assumptions (l,k)"""
-    return bmat[s, l, k] @ q0 + bterm[s, l, k]
+    require_regime(available, l, k)
+    value = bmat[s, l, k] @ q0 + bterm[s, l, k]
+    if available is not None and not np.isfinite(value):
+        raise UnresolvedRegimeError(l, k)
+    return value

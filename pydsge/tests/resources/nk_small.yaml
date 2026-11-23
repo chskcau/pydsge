@@ -1,0 +1,112 @@
+# Small three-equation NK model for testing estimation and posterior analysis.
+# Log deviations are multiplied by 100, rates are quarterly percentage points.
+
+declarations:
+    name: 'nk_small_elb'
+    description: 'Three-equation NK model with Calvo prices and an ELB'
+    variables:
+        - y         # Output deviation from its deterministic BGP
+        - ppi       # Inflation deviation from its long-run rate
+        - r         # Actual nominal rate deviation, including the ELB
+        - rrule     # Nominal rate deviation prescribed by the Taylor rule
+        - Deltay    # Output growth deviation for the measurement equation
+        - epsb      # Demand wedge, positive values reduce demand
+        - epsp      # Cost-push shock
+        - epsr      # Monetary policy shock
+
+    measurement_errors: [me_dy, me_pinfobs, me_robs]
+
+equations:
+    model:
+        # IS equation, without habit formation or capital.
+        ~ y = y(+1) - (r - ppi(+1) + epsb)/sigc
+
+        # Calvo NKPC with a CES aggregator, flexible wages and no indexation.
+        # With linear production and consumption = output, mc = (sigc+sigl)*y.
+        ~ ppi = betpc*ppi(+1) + kappa*y + epsp
+
+        # Smooth the actual lagged interest rate, including when it was bounded.
+        ~ rrule = rho*r(-1) + (1-rho)*(rpi*ppi + ry*y) + epsr
+
+        # Measurement equations in pydsge require current-period variables.
+        ~ Deltay = y - y(-1)
+
+        # Three independent structural innovations for three observables.
+        ~ epsb = rhob*epsb(-1) + etab
+        ~ epsp = rhop*epsp(-1) + etap
+        ~ epsr = rhor*epsr(-1) + etar
+
+    constraint:
+        # pydsge interprets this as r = max(rrule, x_bar).
+        ~ r = rrule
+
+    observables:
+        dy      : Deltay + gambar
+        pinfobs : ppi + pibar
+        robs    : r + rbar
+
+calibration:
+    parameters:
+        # Starting calibration from the SW07 posterior mode, where applicable.
+        sigc         : 1.39
+        sigl         : 1.92  # Fixed to keep the test model small
+        xip          : 0.65
+        rpi          : 2.03
+        ry           : 0.08
+        rho          : 0.81
+        timepref     : 0.16
+        gambar       : 0.43
+        pibar        : 0.81
+        rhob         : 0.18
+        rhop         : 0.90
+        rhor         : 0.12
+        sigetab      : 0.24
+        sigetap      : 0.14
+        sigetar      : 0.24
+
+        # Same ELB implementation as the pydsge examples, with a zero rate-level
+        # floor: actual FEDFUNDS/4 observations fall below their example's 0.07.
+        elb_level    : 0.0   # Lower bound for the observed quarterly nominal rate
+        sig_macro_me : 0.000001
+
+    parafunc:
+        bet    : 1/(1+timepref/100)
+        gam    : 1+gambar/100
+        betbar : bet*gam^(-sigc)
+        betpc  : betbar*gam
+        Pistar : 1+pibar/100
+        rbar   : 100*(Pistar/betbar-1)
+        kappa  : (1-xip)*(1-betpc*xip)/xip*(sigc+sigl)
+        # Translate the rate-level floor into a bound on the model deviation.
+        x_bar  : elb_level-rbar
+
+    covariances_sqrt:
+        etab : sigetab
+        etap : sigetap
+        etar : sigetar
+
+    # Variances. Pass R=model.HH(model.ppar) explicitly to prep_estim.
+    measurement_errors:
+        me_dy      : 'sig_macro_me**2'
+        me_pinfobs : 'sig_macro_me**2'
+        me_robs    : 'sig_macro_me**2'
+
+estimation:
+    prior:
+        # [initial value, search lower bound, search upper bound, distribution, p1, p2]
+        # These priors are copied from models/sw2007.yaml. Their use here does
+        # not reproduce SW's model, including its shock transmission mechanisms.
+        sigetab  : [ 0.1818513, 0.025, 5     , inv_gamma_dynare, 0.1  , 2     ]
+        sigetap  : [ 0.1455   , 0.01 , 3     , inv_gamma_dynare, 0.1  , 2     ]
+        sigetar  : [ 0.2397   , 0.01 , 3     , inv_gamma_dynare, 0.1  , 2     ]
+        rhob     : [ 0.2703   , 0.01 , 0.9999, beta            , 0.5  , 0.20  ]
+        rhop     : [ 0.8692   , 0.01 , 0.9999, beta            , 0.5  , 0.20  ]
+        rhor     : [ 0.3      , 0.01 , 0.9999, beta            , 0.5  , 0.20  ]
+        sigc     : [ 1.2312   , 0.25 , 3     , normal          , 1.50 , 0.375 ]
+        xip      : [ 0.7813   , 0.5  , 0.95  , beta            , 0.5  , 0.10  ]
+        rpi      : [ 1.7985   , 1.0  , 3     , normal          , 1.5  , 0.25  ]
+        rho      : [ 0.8258   , 0.5  , 0.975 , beta            , 0.75 , 0.10  ]
+        ry       : [ 0.0893   , 0.001, 0.5   , normal          , 0.125, 0.05  ]
+        pibar    : [ 0.7      , 0.1  , 2.0   , gamma           , 0.625, 0.1   ]
+        timepref : [ 0.7420   , 0.01 , 2.0   , gamma           , 0.25 , 0.1   ]
+        gambar   : [ 0.3982   , 0.1  , 0.8   , normal          , 0.4  , 0.10  ]

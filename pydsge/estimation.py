@@ -8,7 +8,7 @@ import pathos
 import time
 import tqdm
 from emcwrap import get_prior
-from .exceptions import InvalidProposalError
+from .exceptions import InvalidProposalError, UnresolvedRegimeError
 from .filtering import get_ll
 from .mpile import get_par, set_par
 
@@ -173,6 +173,8 @@ def prep_estim(
                 return get_ll(self, verbose=verbose > 2, dispatch=dispatch)
 
             except InvalidProposalError as err:
+                if isinstance(err, UnresolvedRegimeError):
+                    warnings.warn(f"Rejecting proposal. {err}", UserWarning, stacklevel=2)
                 if verbose:
                     print("[llike:]".ljust(15, " ") +
                           " Failure. Error msg: %s" % err)
@@ -285,7 +287,7 @@ def create_pool(self, ncores=None, threadpool_limit=None):
 @property
 def mapper(self):
 
-    if hasattr(self, "pool") and not self.debug:
+    if getattr(self, "pool", None) is not None and not self.debug:
         return self.pool.imap
     else:
         return map
