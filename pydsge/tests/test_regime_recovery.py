@@ -58,7 +58,7 @@ def test_real_nk_proposal_preserves_likelihood_and_all_selected_regimes():
     assert full.precalc_mat[0].shape[1] == 65
 
 
-def test_partial_grid_matches_complete_grid_and_rejects_required_hole(monkeypatch):
+def test_partial_grid_matches_complete_grid_and_rejects_required_hole(monkeypatch, caplog):
     complete, expected, regimes = nk_likelihood(8)
     original_cell = engine._fill_cell
 
@@ -93,8 +93,12 @@ def test_partial_grid_matches_complete_grid_and_rejects_required_hole(monkeypatc
 
     recorded_transition = partial_model.t_func
     partial_model.t_func = need_missing_regime
-    with pytest.warns(UserWarning, match=r"Rejecting proposal.*L=1, K=3"):
-        assert np.isneginf(partial_model.lprob(NK_PROPOSAL))
+    assert np.isneginf(partial_model.lprob(NK_PROPOSAL))
+    assert "Rejecting proposal. Regime (L=1, K=3)" in caplog.text
+    caplog.clear()
+    with pytest.raises(UnresolvedRegimeError, match=r"L=1, K=3"):
+        partial_model.lprob(NK_PROPOSAL, raise_on_unresolved=True)
+    assert not caplog.records
 
 
 def test_selection_keeps_lexicographic_priority_and_checks_only_visited_cells():

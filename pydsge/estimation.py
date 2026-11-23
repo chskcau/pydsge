@@ -2,6 +2,7 @@
 # -*- coding: utf-8 -*-
 
 import numpy as np
+import logging
 import pandas as pd
 import os
 import pathos
@@ -152,7 +153,7 @@ def prep_estim(
             % self.ndim
         )
 
-    def llike(parameters, par_fix, linear, verbose, seed):
+    def llike(parameters, par_fix, linear, verbose, seed, raise_on_unresolved=False):
 
         random_state = np.random.get_state()
         with warnings.catch_warnings():
@@ -174,7 +175,9 @@ def prep_estim(
 
             except InvalidProposalError as err:
                 if isinstance(err, UnresolvedRegimeError):
-                    warnings.warn(f"Rejecting proposal. {err}", UserWarning, stacklevel=2)
+                    if raise_on_unresolved:
+                        raise
+                    logging.getLogger(__name__).warning("Rejecting proposal. %s", err)
                 if verbose:
                     print("[llike:]".ljust(15, " ") +
                           " Failure. Error msg: %s" % err)
@@ -190,7 +193,9 @@ def prep_estim(
     linear_pa = linear
 
     def lprob(
-            par, par_fix=par_fix, linear=None, verbose=verbose > 1, temp=1, use_prior_transform=use_prior_transform):
+            par, par_fix=par_fix, linear=None, verbose=verbose > 1, temp=1, use_prior_transform=use_prior_transform,
+            *, raise_on_unresolved=False):
+        """Optionally propagate UnresolvedRegimeError for caller-side rejection accounting."""
 
         if use_prior_transform:
             par = bptrans(par)
@@ -210,7 +215,7 @@ def prep_estim(
         if verbose:
             st = time.time()
 
-        ll = llike(par, par_fix, linear, verbose, seed) * temp if temp else 0
+        ll = llike(par, par_fix, linear, verbose, seed, raise_on_unresolved) * temp if temp else 0
 
         if np.isneginf(ll):
             return ll
