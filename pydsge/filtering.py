@@ -154,12 +154,15 @@ def run_filter(
     rcond=1e-14,
     seed=None,
     verbose=False,
+    ll_contributions=None,
 ):
 
     if verbose:
         st = time.time()
 
     self.Z = np.array(self.data)
+    if ll_contributions is not None and (self.filter.name != "TEnKF" or not get_ll):
+        raise ValueError("Per-observation likelihood recording requires the TEnKF likelihood.")
 
     if self.Z.shape[1] == 1:
         raise NotImplementedError(
@@ -293,7 +296,8 @@ def run_filter(
         smoother &= not get_ll
 
         res = self.filter.batch_filter(
-            self.Z, calc_ll=get_ll, store=smoother, seed=seed, verbose=verbose > 0
+            self.Z, calc_ll=get_ll, store=smoother, seed=seed, verbose=verbose > 0,
+            **({"ll_contributions": ll_contributions} if ll_contributions is not None else {})
         )
 
         if smoother:

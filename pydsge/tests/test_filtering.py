@@ -198,6 +198,16 @@ def test_estimation_rejects_invalid_proposals(monkeypatch):
         mod.set_par("rho_x", explosive[0], verbose=False)
     assert np.isneginf(mod.lprob(explosive))
     assert mod.lprob(valid) == reference
+    rejected = mod.lprob(outside_prior, return_evaluation=True)
+    assert rejected.outcome == "outside_prior" and rejected.log_likelihood is None
+    invalid = mod.lprob(explosive, return_evaluation=True)
+    assert invalid.outcome == "invalid_proposal" and np.isneginf(invalid.log_likelihood)
+    evaluated = mod.lprob(valid, return_evaluation=True)
+    assert evaluated.outcome == "evaluated" and evaluated.log_posterior == reference
+    assert evaluated.log_likelihood + evaluated.log_prior == reference
+    prior_only = mod.lprob(valid, temp=0, return_evaluation=True)
+    assert prior_only.outcome == "prior_only" and prior_only.log_likelihood is None
+    assert prior_only.log_posterior == mod.lprior(valid)
 
 
 def test_positive_constraint_bound_stops_estimation(linear_gaussian_model):
@@ -259,6 +269,19 @@ def _record_filter_calls(mod, monkeypatch, likelihood=-12.5):
 
     monkeypatch.setattr(mod.filter, "batch_filter", batch_filter)
     return calls
+
+
+def test_proposal_contributions_match_likelihood_and_clear_on_rejection(ensemble_model):
+    # The full state includes redundant coordinates with singular stationary covariance.
+    ensemble_model.filter.init_cov = np.eye(ensemble_model.filter.dim_x)
+    parts = np.empty(len(ensemble_model.data))
+    parameters = np.array([0.6, 0.4])
+    expected = ensemble_model.lprob(parameters, return_evaluation=True)
+    actual = ensemble_model.lprob(parameters, return_evaluation=True, ll_contributions=parts)
+    assert actual == expected
+    assert np.cumsum(parts)[-1] == actual.log_likelihood
+    assert ensemble_model.lprob(np.array([0.6, -10.]), ll_contributions=parts) == -np.inf
+    assert np.isnan(parts).all()
 
 
 @pytest.mark.parametrize("shock_z", [0.3, -6.0], ids=["unbound", "binding"])

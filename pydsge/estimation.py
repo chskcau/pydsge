@@ -8,10 +8,20 @@ import os
 import pathos
 import time
 import tqdm
+from typing import NamedTuple
 from emcwrap import get_prior
 from .exceptions import InvalidProposalError, UnresolvedRegimeError
 from .filtering import get_ll
 from .mpile import get_par, set_par
+
+
+class ProposalEvaluation(NamedTuple):
+    log_posterior: float
+    log_prior: float
+    log_likelihood: float | None
+    outcome: str
+    regime_l: int = -1
+    regime_k: int = -1
 
 
 def prep_estim(
@@ -153,8 +163,11 @@ def prep_estim(
             % self.ndim
         )
 
-    def llike(parameters, par_fix, linear, verbose, seed, raise_on_unresolved=False):
+    def llike(parameters, par_fix, linear, verbose, seed, raise_on_unresolved=False, raise_on_invalid=False,
+              *, ll_contributions=None):
 
+        if ll_contributions is not None:
+            ll_contributions.fill(np.nan)
         random_state = np.random.get_state()
         with warnings.catch_warnings():
             try:
@@ -171,9 +184,11 @@ def prep_estim(
                 )
                 self.filter.Q = self.QQ(self.ppar) @ self.QQ(self.ppar)
 
-                return get_ll(self, verbose=verbose > 2, dispatch=dispatch)
+                return get_ll(self, verbose=verbose > 2, dispatch=dispatch, ll_contributions=ll_contributions)
 
             except InvalidProposalError as err:
+                if raise_on_invalid:
+                    raise
                 if isinstance(err, UnresolvedRegimeError):
                     if raise_on_unresolved:
                         raise
@@ -194,9 +209,15 @@ def prep_estim(
 
     def lprob(
             par, par_fix=par_fix, linear=None, verbose=verbose > 1, temp=1, use_prior_transform=use_prior_transform,
-            *, raise_on_unresolved=False):
-        """Optionally propagate UnresolvedRegimeError for caller-side rejection accounting."""
+            *, raise_on_unresolved=False, return_evaluation=False, ll_contributions=None):
+        """Optionally report prior, untempered likelihood and known rejection causes.
 
+        For TEnKF, a caller-owned float64 ll_contributions vector receives the
+        untempered log densities in observation order. Unevaluated entries are NaN.
+        """
+
+        if ll_contributions is not None:
+            ll_contributions.fill(np.nan)
         if use_prior_transform:
             par = bptrans(par)
 
@@ -205,7 +226,7 @@ def prep_estim(
         if np.isneginf(lp):
             if verbose:
                 print("[lprob:]".ljust(15, " ") + " prior is -inf.")
-            return lp
+            return ProposalEvaluation(lp, lp, None, "outside_prior") if return_evaluation else lp
         if not np.isfinite(lp):
             raise FloatingPointError(f"Invalid log prior: {lp}.")
 
@@ -215,10 +236,19 @@ def prep_estim(
         if verbose:
             st = time.time()
 
-        ll = llike(par, par_fix, linear, verbose, seed, raise_on_unresolved) * temp if temp else 0
+        try:
+            likelihood = llike(par, par_fix, linear, verbose, seed, raise_on_unresolved,
+                               raise_on_invalid=return_evaluation, ll_contributions=ll_contributions) if temp else None
+        except InvalidProposalError as err:
+            if not return_evaluation:
+                raise
+            if isinstance(err, UnresolvedRegimeError):
+                return ProposalEvaluation(-np.inf, lp, -np.inf, "unresolved_regime", *err.args)
+            return ProposalEvaluation(-np.inf, lp, -np.inf, "invalid_proposal")
+        ll = likelihood * temp if temp else 0
 
         if np.isneginf(ll):
-            return ll
+            return ProposalEvaluation(ll, lp, likelihood, "zero_likelihood") if return_evaluation else ll
 
         ll += lp
         if not np.isfinite(ll):
@@ -231,6 +261,8 @@ def prep_estim(
                 % (np.round(time.time() - st, 3), np.round(ll, 4), np.round(temp, 4))
             )
 
+        if return_evaluation:
+            return ProposalEvaluation(ll, lp, likelihood, "evaluated" if temp else "prior_only")
         return ll
 
     # make functions accessible

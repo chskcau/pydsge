@@ -33,7 +33,7 @@ def _get_shock_scales(calibration):
     if key == "covariances":
         warnings.warn(
             "The name 'covariances' is misleading: entries are shock standard "
-            "deviations, not variances. Use 'covariances_sqrt' instead; "
+            "deviations, not variances. Consider using 'covariances_sqrt' instead; "
             "the numerical meaning of the entries is unchanged.",
             UserWarning,
             stacklevel=3,

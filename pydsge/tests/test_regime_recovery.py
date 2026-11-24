@@ -99,6 +99,10 @@ def test_partial_grid_matches_complete_grid_and_rejects_required_hole(monkeypatc
     with pytest.raises(UnresolvedRegimeError, match=r"L=1, K=3"):
         partial_model.lprob(NK_PROPOSAL, raise_on_unresolved=True)
     assert not caplog.records
+    evaluation = partial_model.lprob(NK_PROPOSAL, return_evaluation=True)
+    assert evaluation.outcome == "unresolved_regime"
+    assert (evaluation.regime_l, evaluation.regime_k) == (1, 3)
+    assert np.isneginf(evaluation.log_posterior) and np.isfinite(evaluation.log_prior)
 
 
 def test_selection_keeps_lexicographic_priority_and_checks_only_visited_cells():
