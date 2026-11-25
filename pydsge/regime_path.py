@@ -8,6 +8,7 @@ from scipy.sparse.linalg import splu
 
 from .engine import find_lk, require_regime
 from .exceptions import UnresolvedRegimeError
+from .precision import timed_regime_operation
 
 DEFAULT_REGIME_FALLBACK_DIGITS = 200
 
@@ -215,6 +216,7 @@ class RegimePaths:
             rules[i, j] = rule, endpoints
         return ctx, rules
 
+    @timed_regime_operation
     def _precise_path(self, l, k, initial=None, length=None):
         """Propagate affine maps, or a particular state, without intermediate rounding."""
         ctx, rules = self._precise_rules(l, k)
@@ -233,6 +235,7 @@ class RegimePaths:
             q[:d, :] = current[:d, :]
         return rows
 
+    @timed_regime_operation
     def _repair(self, l, k, matrices):
         try:
             _, rules = self._precise_rules(l, k)
@@ -275,18 +278,22 @@ class RegimePaths:
                 return
         self._repair(l, k, matrices)
 
+    @timed_regime_operation
+    def _precise_endpoints_valid(self, l, k, x):
+        ctx, rules = self._precise_rules(l, k)
+        values = rules[l, k][1] * ctx.matrix(x.tolist())
+        return (
+            (not l or values[0] >= self.bound)
+            and (l <= 1 or values[1] >= self.bound)
+            and values[2] <= self.bound
+            and (k <= 1 or values[3] <= self.bound)
+            and values[4] >= self.bound
+        )
+
     def _valid(self, l, k, state, matrices, full):
         x = np.r_[state, 1.0]
         if not full:
-            ctx, rules = self._precise_rules(l, k)
-            values = rules[l, k][1] * ctx.matrix(x.tolist())
-            return (
-                (not l or values[0] >= self.bound)
-                and (l <= 1 or values[1] >= self.bound)
-                and values[2] <= self.bound
-                and (k <= 1 or values[3] <= self.bound)
-                and values[4] >= self.bound
-            )
+            return self._precise_endpoints_valid(l, k, x)
         self._prepare_path(l, k, matrices)
         if (l, k) not in self.paths:
             rows = self._precise_path(l, k, length=len(self.free))
@@ -341,6 +348,7 @@ class RegimePaths:
         if self.pending[l, k]:
             self._repair(l, k, matrices)
 
+    @timed_regime_operation
     def transition(self, l, k, state):
         ctx, rules = self._precise_rules(l, k)
         current = rules[l, k][0] * ctx.matrix([*state.tolist(), 1.0])
@@ -358,6 +366,7 @@ class RegimePaths:
             return np.array(list(path), dtype=float)
         return self.paths[l, k] @ np.r_[state, 1.0]
 
+    @timed_regime_operation
     def release(self, l, k, state):
         ctx, rules = self._precise_rules(l, k)
         return float((rules[l, k][1][4, :] * ctx.matrix([*state.tolist(), 1.0]))[0])

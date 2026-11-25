@@ -10,7 +10,7 @@ import time
 import tqdm
 from typing import NamedTuple
 from emcwrap import get_prior
-from .exceptions import InvalidProposalError, UnresolvedRegimeError
+from .exceptions import InvalidProposalError, UnresolvedForecastError, UnresolvedRegimeError
 from .filtering import get_ll
 from .mpile import get_par, set_par
 from .regime_path import resolve_regime_fallback_digits
@@ -257,6 +257,8 @@ def prep_estim(
                 raise
             if isinstance(err, UnresolvedRegimeError):
                 return ProposalEvaluation(-np.inf, lp, -np.inf, "unresolved_regime", *err.args)
+            if isinstance(err, UnresolvedForecastError):
+                return ProposalEvaluation(-np.inf, lp, -np.inf, "unresolved_forecast")
             return ProposalEvaluation(-np.inf, lp, -np.inf, "invalid_proposal")
         ll = likelihood * temp if temp else 0
 

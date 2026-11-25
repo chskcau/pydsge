@@ -307,6 +307,34 @@ def test_saved_model_inherits_solver_precision_on_rebuild(tmp_path, digits):
     assert restored.regime_paths.regime_fallback_decimal_digits == digits
 
 
+def test_disabled_filter_retry_is_a_distinct_rejection(ensemble_model, monkeypatch):
+    from econsieve import ForecastPrecisionRequired
+    from econsieve.tenkf import ForecastNumericalError
+    from pydsge.precision import collect_precision
+
+    model = ensemble_model
+    model.filter.init_cov = np.eye(model.filter.dim_x)
+    error = ForecastPrecisionRequired("Observation 0 needs high precision.")
+
+    def reject(data, **kwargs):
+        model.filter.precision_requests = 1
+        raise error
+
+    monkeypatch.setattr(model.filter, "batch_filter", reject)
+    parameters = np.array([0.6, 0.4])
+    with collect_precision() as stats:
+        result = model.lprob(parameters, return_evaluation=True)
+    assert result.log_posterior == -np.inf and result.outcome == "unresolved_forecast"
+    assert (stats.filter.requests, stats.filter.attempts, stats.filter.completed) == (1, 0, 0)
+    assert stats.filter.seconds == 0
+    with collect_precision() as outside:
+        assert model.lprob(np.array([0.6, -10.])) == -np.inf
+    assert outside.filter.requests == 0
+    error = ForecastNumericalError("unexpected numerical failure")
+    with pytest.raises(ForecastNumericalError, match="unexpected"):
+        model.lprob(parameters)
+
+
 def test_proposal_contributions_match_likelihood_and_clear_on_rejection(ensemble_model):
     # The full state includes redundant coordinates with singular stationary covariance.
     ensemble_model.filter.init_cov = np.eye(ensemble_model.filter.dim_x)

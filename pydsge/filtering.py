@@ -2,6 +2,7 @@
 
 import time
 import dill
+import econsieve
 import numpy as np
 import scipy.linalg as sl
 import pandas as pd
@@ -10,6 +11,11 @@ from grgrlib import timeprint
 from grgrlib.multiprocessing import serializer
 from econsieve.stats import logpdf
 from .engine import require_regime
+from .exceptions import UnresolvedForecastError
+from .precision import current_precision
+
+# Older EconSieve versions do not offer the explicit precision-rejection policy.
+_precision_required = getattr(econsieve, "ForecastPrecisionRequired", ())
 
 
 def create_obs_cov(self, scale_obs=0.1):
@@ -295,10 +301,21 @@ def run_filter(
 
         smoother &= not get_ll
 
-        res = self.filter.batch_filter(
-            self.Z, calc_ll=get_ll, store=smoother, seed=seed, verbose=verbose > 0,
-            **({"ll_contributions": ll_contributions} if ll_contributions is not None else {})
-        )
+        try:
+            res = self.filter.batch_filter(
+                self.Z, calc_ll=get_ll, store=smoother, seed=seed, verbose=verbose > 0,
+                **({"ll_contributions": ll_contributions} if ll_contributions is not None else {})
+            )
+        except _precision_required as exc:
+            raise UnresolvedForecastError(str(exc)) from exc
+        finally:
+            stats = current_precision.get()
+            if stats is not None and self.filter.name == "TEnKF":
+                work = stats.filter
+                work.requests += self.filter.precision_requests
+                work.attempts += self.filter.high_precision_updates
+                work.completed += self.filter.high_precision_completed
+                work.seconds += self.filter.high_precision_seconds
 
         if smoother:
             res = self.filter.rts_smoother(res, rcond=rcond)

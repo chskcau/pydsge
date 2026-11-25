@@ -87,6 +87,16 @@ call uses 300 digits for the regime solver and 100 digits for the filter.
 
 The free terminal policy and model inputs retain their original Float64 precision.
 
+To measure one likelihood evaluation, use
+``with pydsge.precision.collect_precision() as stats:`` around the call to
+``model.lprob(...)`` (import ``pydsge.precision`` first). The attributes
+``stats.regime`` and ``stats.filter`` count requests, attempts, completed
+operations and elapsed seconds. Measurements belong to the calling execution
+context. They include work up to a rejection and preserve the usual return type.
+With the local EconSieve fork, ``fallback_decimal_digits=None`` keeps forecast
+checks active. A required retry then yields the proposal outcome
+``unresolved_forecast`` when ``return_evaluation=True``.
+
 Citation
 --------
 

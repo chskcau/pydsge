@@ -2,6 +2,10 @@ class InvalidProposalError(ValueError):
     """The proposed parameters violate a known model or solution condition."""
 
 
+class UnresolvedForecastError(InvalidProposalError):
+    """A required high-precision forecast update was disabled."""
+
+
 class UnresolvedRegimeError(InvalidProposalError):
     """A required regime could not be resolved numerically."""
 

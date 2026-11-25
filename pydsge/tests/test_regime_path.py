@@ -7,6 +7,7 @@ import pytest
 
 from pydsge.engine import _constraint_grid
 from pydsge.exceptions import UnresolvedRegimeError
+from pydsge.precision import collect_precision
 from pydsge.regime_path import RegimePaths
 
 
@@ -84,9 +85,10 @@ def test_disabled_recovery_still_checks_the_path_and_leaves_clear_signs_usable()
     assert paths.select(matrices, None, state, True)[2] != 0
     # The free path touches the bound beyond the original free-regime test dates.
     state = np.array([0.0, 0.0, 0.0, 0.0, -1.0, 0.0, 0.0, 0.0])
-    with pytest.raises(UnresolvedRegimeError, match="L=0, K=0"):
+    with collect_precision() as stats, pytest.raises(UnresolvedRegimeError, match="L=0, K=0"):
         paths.select(matrices, None, state, True)
     assert paths._precision is None
+    assert (stats.regime.requests, stats.regime.attempts, stats.regime.completed, stats.regime.seconds) == (1, 0, 0, 0)
 
 
 def test_earlier_unresolved_cell_cannot_be_skipped():
@@ -94,8 +96,22 @@ def test_earlier_unresolved_cell_cannot_be_skipped():
     paths.pending[0, 1] = True
     a, b, h = paths.system[0]
     paths.system = ((a * 0, b * 0, h), paths.system[1])
-    with pytest.raises(UnresolvedRegimeError, match="L=0, K=1"):
+    with collect_precision() as stats, pytest.raises(UnresolvedRegimeError, match="L=0, K=1"):
         paths.select(matrices, None, np.full(8, -2.0), True)
+    assert (stats.regime.requests, stats.regime.attempts, stats.regime.completed) == (1, 1, 0)
+    assert stats.regime.seconds > 0
+
+
+def test_precision_work_counts_repair_and_resets_between_evaluations():
+    paths, matrices = shift_model()
+    paths.pending[0, 1] = True
+    with collect_precision() as stats:
+        paths.imposed(0, 1, matrices, None)
+    assert (stats.regime.requests, stats.regime.attempts, stats.regime.completed) == (1, 1, 1)
+    assert stats.regime.seconds > 0
+    with collect_precision() as cached:
+        paths.imposed(0, 1, matrices, None)
+    assert cached.regime.requests == 0
 
 
 def test_roundoff_at_an_endpoint_does_not_eliminate_a_feasible_candidate():
