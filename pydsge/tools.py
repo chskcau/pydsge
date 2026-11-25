@@ -14,6 +14,14 @@ from .engine import *
 from decimal import Decimal
 
 
+def _select_regime(model, state):
+    available = getattr(model, "regime_available", None)
+    paths = getattr(model, "regime_paths", None)
+    if paths is None:  # Older serialized models acquire the checker on gen_sys().
+        return find_lk(*model.precalc_mat[4:], model.sys[2], state, available)
+    return paths.select(model.precalc_mat, available, state, model.verify_regime_path)
+
+
 def t_func(
     self,
     state,
@@ -72,22 +80,29 @@ def t_func(
     if return_flag is None:
         return_flag = True
 
-    pobs, q, l, k, flag = t_func_jit(
-        pmat,
-        pterm,
-        qmat[:, :, :-dimeps],
-        qterm[..., :-dimeps],
-        bmat,
-        bterm,
-        x_bar,
-        *self.hx,
-        state[-dimq + dimeps:],
-        shocks,
-        set_l,
-        set_k,
-        get_obs,
-        getattr(self, "regime_available", None),
-    )
+    lagged = state[-dimq + dimeps:] if dimq > dimeps else state[:0]
+    initial = np.hstack((lagged, shocks))
+    available = getattr(self, "regime_available", None)
+    paths = getattr(self, "regime_paths", None)
+    flag = 0
+    if set_k == -1:
+        set_l, set_k, flag = _select_regime(self, initial)
+    elif paths is not None:
+        paths.imposed(set_l, set_k, self.precalc_mat, available)
+
+    if paths is not None and paths.repaired[set_l, set_k]:
+        current = paths.transition(set_l, set_k, initial)
+        q = current[:dimq-dimeps]
+        pobs = current[dimq:]
+        if get_obs:
+            hxp, hxq, hxc = self.hx
+            pobs = hxp @ pobs + hxq @ q + hxc
+        l, k = set_l, set_k
+    else:
+        pobs, q, l, k, _ = t_func_jit(
+            pmat, pterm, qmat[:, :, :dimq-dimeps], qterm[..., :dimq-dimeps],
+            bmat, bterm, x_bar, *self.hx, lagged, shocks, set_l, set_k, get_obs, available,
+        )
 
     newstate = (q, pobs) if get_obs else np.hstack((pobs, q))
 
@@ -504,9 +519,7 @@ def traj(self, state, l=None, k=None, verbose=True):
 
     if k is None or l is None:
 
-        omg, lam, x_bar = self.sys
-        pmat, qmat, pterm, qterm, bmat, bterm = self.precalc_mat
-        l, k, flag = find_lk(bmat, bterm, x_bar, state, getattr(self, "regime_available", None))
+        l, k, flag = _select_regime(self, state)
 
         if verbose:
             if flag == 0:
@@ -521,6 +534,13 @@ def traj(self, state, l=None, k=None, verbose=True):
                 + "l=%s, k=%s, flag is %s%s." % (l, k, flag, meaning)
             )
 
+    paths = getattr(self, "regime_paths", None)
+    available = getattr(self, "regime_available", None)
+    require_regime(available, l, k)
+    if paths is not None:
+        paths.imposed(l, k, self.precalc_mat, available)
+        return paths.trajectory(l, k, state, self.precalc_mat)
+
     if not hasattr(self, "precalc_tmat"):
 
         fq1, fp1, fq0 = self.ff
@@ -528,8 +548,7 @@ def traj(self, state, l=None, k=None, verbose=True):
 
     tmat, tterm = self.precalc_tmat
 
-    require_regime(getattr(self, "regime_available", None), l, k - 1)
-    return tmat[:, l, k - 1] @ state + tterm[:, l, k - 1]
+    return tmat[:, l, k] @ state + tterm[:, l, k]
 
 
 def k_map(self, state, l=None, k=None, verbose=True):
@@ -537,8 +556,7 @@ def k_map(self, state, l=None, k=None, verbose=True):
     omg, lam, x_bar = self.sys
 
     if k is None:
-        pmat, qmat, pterm, qterm, bmat, bterm = self.precalc_mat
-        l_endo, k, flag = find_lk(bmat, bterm, x_bar, state, getattr(self, "regime_available", None))
+        l_endo, k, flag = _select_regime(self, state)
 
         l = l or l_endo
 
@@ -557,24 +575,18 @@ def k_map(self, state, l=None, k=None, verbose=True):
     else:
         l = l or 0
 
-    if not hasattr(self, "precalc_tmat"):
-
-        fq1, fp1, fq0 = self.ff
-        preprocess_tmats(self, fq1, fp1, fq0, verbose > 1)
-
     l_max, k_max = self.lks
-    tmat, tterm = self.precalc_tmat
-
+    bmat, bterm = self.precalc_mat[4:]
     available = getattr(self, "regime_available", None)
-    if available is not None:
-        for i in range(l_max):
-            require_regime(available, i, k)
-        for i in range(k_max):
-            require_regime(available, l, i)
-    LS = np.array(
-        [tmat[i + k, i, k] @ state + tterm[i + k, i, k] for i in range(l_max)]
-    )
-    KS = np.array(
-        [tmat[l + i, l, i] @ state + tterm[l + i, l, i] for i in range(k_max)]
-    )
+    paths = getattr(self, "regime_paths", None)
+
+    def release(i, j):
+        if paths is not None:
+            paths.imposed(i, j, self.precalc_mat, available)
+            if paths.repaired[i, j]:
+                return paths.release(i, j, state)
+        return check_cnst(bmat, bterm, 4, i, j, state, available)
+
+    LS = np.array([release(i, k) for i in range(l_max)])
+    KS = np.array([release(l, j) for j in range(k_max)])
     return LS - x_bar, KS - x_bar

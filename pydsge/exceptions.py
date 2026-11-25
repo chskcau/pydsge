@@ -3,8 +3,8 @@ class InvalidProposalError(ValueError):
 
 
 class UnresolvedRegimeError(InvalidProposalError):
-    """A singular policy recursion prevents evaluation of a required regime."""
+    """A required regime could not be resolved numerically."""
 
     def __str__(self):
         l, k = self.args
-        return f"Regime (L={l}, K={k}) is numerically unresolved after a singular regime inversion."
+        return f"Regime (L={l}, K={k}) is numerically unresolved."

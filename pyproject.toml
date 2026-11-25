@@ -30,6 +30,7 @@ dependencies = [
     "pyyaml",
     "scipy",
     "sympy>=1.12",
+    "mpmath",
     "emcwrap>=0.2.5",
     "grgrlib>=0.1.15",
     "econsieve>=0.0.9",
@@ -43,6 +44,10 @@ Homepage = "https://pydsge.readthedocs.io/en/latest/index.html"
 dev = [
     "pytest",
 ]
+
+[tool.uv.sources]
+econsieve = { path = "../econsieve", editable = true }
+grgrlib = { path = "../grgrlib", editable = true }
 
 [tool.setuptools]
 include-package-data = true

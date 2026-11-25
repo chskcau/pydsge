@@ -271,6 +271,42 @@ def _record_filter_calls(mod, monkeypatch, likelihood=-12.5):
     return calls
 
 
+def test_estimation_keeps_solver_and_filter_precision_separate(monkeypatch):
+    from pydsge import filtering
+
+    model = _load_gaussian_model()
+    constructor = filtering.TEnKF
+    filter_digits = []
+
+    def build_filter(*args, fallback_decimal_digits, **kwargs):
+        filter_digits.append(fallback_decimal_digits)
+        return constructor(*args, **kwargs)
+
+    monkeypatch.setattr(filtering, "TEnKF", build_filter)
+    model.prep_estim(N=16, seed=0, ncores=0, dry_run=False, verbose=False,
+                     R=np.eye(2), regime_fallback_decimal_digits=90,
+                     fallback_decimal_digits=120)
+    assert filter_digits == [120]
+    assert model.regime_paths.regime_fallback_decimal_digits == 90
+    # Rebuilding the model for another calculation must not reconfigure this likelihood.
+    model.gen_sys(regime_fallback_decimal_digits=None, verbose=False)
+    assert np.isfinite(model.lprob(np.array([0.6, 0.4])))
+    assert model.regime_paths.regime_fallback_decimal_digits == 90
+
+
+@pytest.mark.parametrize("digits", [np.int64(77), None])
+def test_saved_model_inherits_solver_precision_on_rebuild(tmp_path, digits):
+    model = _load_gaussian_model()
+    model.set_par("calib", l_max=2, k_max=3, regime_fallback_decimal_digits=digits)
+    filename = str(tmp_path / "precision.npz")
+    model.save(filename, verbose=False)
+    restored = DSGE.load(filename)
+    restored.prep_estim(linear=True, ncores=0, dry_run=False, verbose=False)
+    assert restored.regime_paths.regime_fallback_decimal_digits == digits
+    restored.set_par("calib")
+    assert restored.regime_paths.regime_fallback_decimal_digits == digits
+
+
 def test_proposal_contributions_match_likelihood_and_clear_on_rejection(ensemble_model):
     # The full state includes redundant coordinates with singular stationary covariance.
     ensemble_model.filter.init_cov = np.eye(ensemble_model.filter.dim_x)

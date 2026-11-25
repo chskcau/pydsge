@@ -242,21 +242,34 @@ wheels = [
 
 [[package]]
 name = "econsieve"
-version = "0.0.9"
-source = { registry = "https://pypi.org/simple" }
+source = { editable = "../econsieve" }
 dependencies = [
     { name = "grgrlib" },
     { name = "matplotlib" },
+    { name = "mpmath" },
     { name = "numba" },
     { name = "numpy", version = "2.4.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.12'" },
     { name = "numpy", version = "2.5.3", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12'" },
     { name = "scipy", version = "1.17.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.12'" },
     { name = "scipy", version = "1.18.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12'" },
+    { name = "tqdm" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/3f/9c/f1419c2750faffcee8465827da665d7b729ba8dc043c21f9fbde6a882a2b/econsieve-0.0.9.tar.gz", hash = "sha256:ed436091cb73053243511c0f7bdc7f3313bc631bc233e8f3cbf72326b1f75187", size = 23171, upload-time = "2024-07-11T10:09:36.839Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/1b/67/09b2c97167e4667d1164cc46e27ae051b55b8cfc3c74044d6b3493cb6d83/econsieve-0.0.9-py3-none-any.whl", hash = "sha256:fdf753726f9748f6dd1da34c4566f60cdb726ec401abce2ae1207de928db1ff2", size = 24134, upload-time = "2024-07-11T10:09:34.788Z" },
+
+[package.metadata]
+requires-dist = [
+    { name = "grgrlib", editable = "../grgrlib" },
+    { name = "matplotlib" },
+    { name = "mpmath" },
+    { name = "numba" },
+    { name = "numpy" },
+    { name = "pytest", marker = "extra == 'test'" },
+    { name = "scipy" },
+    { name = "tqdm" },
 ]
+provides-extras = ["test"]
+
+[package.metadata.requires-dev]
+dev = [{ name = "pytest" }]
 
 [[package]]
 name = "emcee"
@@ -359,7 +372,7 @@ wheels = [
 [[package]]
 name = "grgrlib"
 version = "0.2.1"
-source = { registry = "https://pypi.org/simple" }
+source = { editable = "../grgrlib" }
 dependencies = [
     { name = "matplotlib" },
     { name = "numpy", version = "2.4.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.12'" },
@@ -367,10 +380,19 @@ dependencies = [
     { name = "scipy", version = "1.17.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.12'" },
     { name = "scipy", version = "1.18.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12'" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/cd/c5/6e9af40199d295382c82d058e324ebc8595b7d8ebca7e919c45d4944ac45/grgrlib-0.2.1.tar.gz", hash = "sha256:00aa8a05a674e22c19aec5e013dacc977a4c5a816e8330f9fc3beb3c736d3422", size = 29657, upload-time = "2024-07-11T10:08:14.103Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/1c/7b/815379b48ec3fd7769e3ba8cfae8a76f3b57a837659863f7ec8793f48c40/grgrlib-0.2.1-py3-none-any.whl", hash = "sha256:b05dd4f019a3a47c08fe2fecd63c81d271909137fbde2a4c3dd9df72608b603b", size = 33217, upload-time = "2024-07-11T10:08:11.612Z" },
+
+[package.metadata]
+requires-dist = [
+    { name = "chaospy", marker = "extra == 'opti'" },
+    { name = "jax", marker = "extra == 'jaxed'" },
+    { name = "jaxlib", marker = "extra == 'jaxed'" },
+    { name = "matplotlib" },
+    { name = "numba", marker = "extra == 'njitted'" },
+    { name = "numpy" },
+    { name = "pandas", marker = "extra == 'data'" },
+    { name = "scipy" },
 ]
+provides-extras = ["njitted", "jaxed", "opti", "data"]
 
 [[package]]
 name = "h5py"
@@ -1127,6 +1149,7 @@ dependencies = [
     { name = "emcwrap" },
     { name = "grgrlib" },
     { name = "h5py" },
+    { name = "mpmath" },
     { name = "numba" },
     { name = "numpy", version = "2.4.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.12'" },
     { name = "numpy", version = "2.5.3", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12'" },
@@ -1149,11 +1172,12 @@ dev = [
 requires-dist = [
     { name = "cloudpickle" },
     { name = "dill" },
-    { name = "econsieve", specifier = ">=0.0.9" },
+    { name = "econsieve", editable = "../econsieve" },
     { name = "emcee" },
     { name = "emcwrap", specifier = ">=0.2.5" },
-    { name = "grgrlib", specifier = ">=0.1.15" },
+    { name = "grgrlib", editable = "../grgrlib" },
     { name = "h5py" },
+    { name = "mpmath" },
     { name = "numba" },
     { name = "numpy" },
     { name = "pandas" },

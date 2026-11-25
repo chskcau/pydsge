@@ -10,6 +10,7 @@ cloudpickle
 h5py
 pyyaml
 sympy>=1.12
+mpmath
 emcwrap>=0.2.5
 grgrlib>=0.1.15
 econsieve>=0.0.9

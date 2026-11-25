@@ -14,7 +14,7 @@ si_eps = sys.float_info.epsilon
 
 
 @njit(cache=True, nogil=True)
-def get_lam(omg, psi, S, T, V, W, h, l):
+def _get_lam_and_condition(omg, psi, S, T, V, W, h, l):
 
     dimp, dimq = omg.shape
 
@@ -22,10 +22,20 @@ def get_lam(omg, psi, S, T, V, W, h, l):
     B = T if l else W
     c = np.zeros(dimq) if l else h[:dimq]
 
-    inv = nl.inv(A[:dimq, :dimq] + aca(A[:dimq, dimq:]) @ omg)
+    block = A[:dimq, :dimq] + aca(A[:dimq, dimq:]) @ omg
+    inv = nl.inv(block)
     lam = inv @ aca(B[:dimq, :dimq])
     xi = inv @ (c - aca(A[:dimq, dimq:]) @ psi)
 
+    # The inverse is already available. Estimate amplification of Float64
+    # perturbations, including those introduced by the preceding RQ rotation.
+    condition = nl.norm(block, np.inf) * nl.norm(inv, np.inf)
+    return lam, xi, condition
+
+
+@njit(cache=True, nogil=True)
+def get_lam(omg, psi, S, T, V, W, h, l):
+    lam, xi, _ = _get_lam_and_condition(omg, psi, S, T, V, W, h, l)
     return lam, xi
 
 
@@ -86,40 +96,47 @@ def _fill_cell(system, policy, l, k, prev_l, prev_k):
     S, T, V, W, h = system
     pmat, qmat, pterm, qterm = policy
     omg, psi = pmat[prev_l, prev_k], pterm[prev_l, prev_k]
-    qmat[l, k], qterm[l, k] = get_lam(omg, psi, S, T, V, W, h, l)
+    qmat[l, k], qterm[l, k], condition = _get_lam_and_condition(omg, psi, S, T, V, W, h, l)
     pmat[l, k], pterm[l, k] = get_omg(
         omg, psi, qmat[l, k], qterm[l, k], S, T, V, W, h, l
     )
+    return not np.isfinite(condition) or condition > 1 / np.sqrt(si_eps)
 
 
 @njit(cache=True)
 def _fill_grid(system, policy):
+    suspect = np.zeros(policy[0].shape[:2], dtype=np.bool_)
     for l in range(policy[0].shape[0]):
         for k in range(policy[0].shape[1]):
             if l or k:
-                _fill_cell(system, policy, l, k, max(l - 1, 0), k if l else k - 1)
+                prev_l, prev_k = max(l - 1, 0), k if l else k - 1
+                ill_conditioned = _fill_cell(system, policy, l, k, prev_l, prev_k)
+                suspect[l, k] = ill_conditioned or suspect[prev_l, prev_k]
+    return suspect
 
 
 def _recover_grid(system, policy):
     """Recompute independent cells after a singular regime inversion."""
     available = np.ones(policy[0].shape[:2], dtype=bool)
+    suspect = np.zeros_like(available)
     for l, k in np.ndindex(available.shape):
         if l == k == 0:
             continue
         prev_l, prev_k = max(l - 1, 0), k if l else k - 1
         if available[prev_l, prev_k]:
             try:
-                _fill_cell(system, policy, l, k, prev_l, prev_k)
+                ill_conditioned = _fill_cell(system, policy, l, k, prev_l, prev_k)
             except nl.LinAlgError as exc:
                 if not _singular_inversion(exc):
                     raise
             else:
                 if all(np.isfinite(matrix[l, k]).all() for matrix in policy):
+                    suspect[l, k] = bool(ill_conditioned) or suspect[prev_l, prev_k]
                     continue
         available[l, k] = False
         for matrix in policy:
             matrix[l, k] = np.nan
-    return available
+    return available, suspect
 
 
 def _singular_inversion(exc):
@@ -169,9 +186,11 @@ def _constraint_grid(policy, fq1, fp1, fq0):
     return bmat, bterm
 
 
-def preprocess_jittable(S, T, V, W, h, fq1, fp1, fq0, omg, lam, x_bar, l_max, k_max):
+def preprocess_jittable(S, T, V, W, h, fq1, fp1, fq0, omg, lam, x_bar, l_max, k_max, suspect=None):
     policy = _initialize_grid(S, T, V, W, h, omg, lam, l_max, k_max)
-    _fill_grid((S, T, V, W, h), policy)
+    sensitivity = _fill_grid((S, T, V, W, h), policy)
+    if suspect is not None:
+        suspect[:] = sensitivity
     return policy + _constraint_grid(policy, fq1, fp1, fq0)
 
 
@@ -227,22 +246,22 @@ def preprocess(self, PU, MU, PR, MR, gg, fq1, fp1, fq0, parallel=False, verbose=
     preprocess_jit_loc = preprocess_jit_parallel if parallel else preprocess_jit
     system = PU, MU, PR, MR, gg
     available = None
+    suspect = np.empty((l_max + 1, k_max + 1), dtype=bool)
     try:
         # Normalization in the compiled kernel is in-place. Retain the inputs
         # so that a failed recursion can be replayed cell by cell.
         matrices = preprocess_jit_loc(
-            *(a.copy(order="K") for a in system), fq1, fp1, fq0, omg, lam, x_bar, l_max, k_max
+            *(a.copy(order="K") for a in system), fq1, fp1, fq0, omg, lam, x_bar, l_max, k_max, suspect
         )
     except nl.LinAlgError as exc:
         if not _singular_inversion(exc):
             raise
         # Singular common blocks still fail here, before any regime can be used.
         policy = _initialize_grid(*system, omg, lam, l_max, k_max)
-        available = _recover_grid(system, policy)
+        available, suspect = _recover_grid(system, policy)
         bounds = _partial_bounds_parallel if parallel else _partial_bounds
         matrices = policy + bounds(policy, fq1, fp1, fq0)
-    partial_grid_changed = available is not None or getattr(self, "regime_available", None) is not None
-    if partial_grid_changed and hasattr(self, "precalc_tmat"):
+    if hasattr(self, "precalc_tmat"):
         del self.precalc_tmat
     self.precalc_mat = matrices
     self.regime_available = available
@@ -253,7 +272,7 @@ def preprocess(self, PU, MU, PR, MR, gg, fq1, fp1, fq0, parallel=False, verbose=
             + " Preprocessing finished within %ss." % np.round((time.time() - st), 5)
         )
 
-    return
+    return suspect
 
 
 def preprocess_tmats(self, fq1, fp1, fq0, verbose):
@@ -329,7 +348,7 @@ def require_regime(available, l, k):
 
 
 @njit(nogil=True, cache=True)
-def find_lk(bmat, bterm, x_bar, q, available=None):
+def find_lk(bmat, bterm, x_bar, q, available=None, start=0, pending=None, repaired=None):
     """iteration loop to find (l,k) given state q"""
 
     _, l_max, k_max = bterm.shape
@@ -338,7 +357,7 @@ def find_lk(bmat, bterm, x_bar, q, available=None):
     l, k = 0, 0
 
     # check if (0,0) is a solution
-    while check_cnst(bmat, bterm, 2, l, 0, q, available) - x_bar > 0:
+    while start == 0 and check_cnst(bmat, bterm, 2, l, 0, q, available) - x_bar > 0:
         l += 1
         if l == l_max:
             break
@@ -346,7 +365,7 @@ def find_lk(bmat, bterm, x_bar, q, available=None):
     # check if (0,k) is a solution
     if l < l_max:
         # needs to be wrapped so that both loops can be exited at once
-        l, k = bruite_wrapper(bmat, bterm, x_bar, q, available)
+        l, k = first_binding_regime(bmat, bterm, x_bar, q, available, start, pending, repaired)
 
         # if still no solution, use approximation
         if l == 999:
@@ -354,6 +373,8 @@ def find_lk(bmat, bterm, x_bar, q, available=None):
             l, k = 0, 0
             loop_type = False
 
+            if k_max == 1:
+                return 0, 0, 2
             while True:
                 k += 1
                 if not loop_type:
@@ -373,25 +394,49 @@ def find_lk(bmat, bterm, x_bar, q, available=None):
 
 
 @njit(nogil=True, cache=True)
-def bruite_wrapper(bmat, bterm, x_bar, q, available=None):
+def first_binding_regime(bmat, bterm, x_bar, q, available=None, start=0, pending=None, repaired=None):
     """iterate over (l,k) until (l_max, k_max) and check if RE equilibrium"""
     _, l_max, k_max = bterm.shape
 
-    for l in range(l_max):
-        for k in range(1, k_max):
-            if l and check_cnst(bmat, bterm, 0, l, k, q, available) - x_bar < 0:
+    for index in range(max(start - 1, 0), l_max * (k_max - 1)):
+        l, offset = divmod(index, k_max - 1)
+        k = offset + 1
+        require_regime(available, l, k)
+        if pending is not None and pending[l, k]:
+            return l, k
+        for slot in (0, 1, 4, 2, 3):
+            if (slot == 0 and l == 0) or (slot == 1 and l <= 1) or (slot == 3 and k == 1):
                 continue
-            if l > 1 and check_cnst(bmat, bterm, 1, l, k, q, available) - x_bar < 0:
-                continue
-            if check_cnst(bmat, bterm, 4, l, k, q, available) - x_bar < 0:
-                continue
-            if check_cnst(bmat, bterm, 2, l, k, q, available) - x_bar > 0:
-                continue
-            if k > 1 and check_cnst(bmat, bterm, 3, l, k, q, available) - x_bar > 0:
-                continue
+            row = bmat[slot, l, k]
+            margin = (row @ q + bterm[slot, l, k]) - x_bar
+            if slot == 2 or slot == 3:
+                margin = -margin
+            if np.isfinite(margin):
+                if margin >= 0:
+                    continue
+                if pending is None:
+                    break
+                # Even a well-conditioned cell can have a dot product whose
+                # sign is lost to cancellation for a particular initial state.
+                scale = abs(bterm[slot, l, k]) + abs(x_bar)
+                for j in range(q.size):
+                    scale += abs(row[j]) * abs(q[j])
+                if -margin > (q.size + 3) * si_eps * scale:
+                    break
+            elif pending is None:
+                raise UnresolvedRegimeError(l, k)
+            # Let the caller resolve this ambiguous test before advancing.
+            # On revisiting a repaired cell the other cheap tests still apply.
+            if pending is not None and (repaired is None or not repaired[l, k]):
+                pending[l, k] = True
+                return l, k
+        else:
             return l, k
 
     return 999, 999
+
+
+bruite_wrapper = first_binding_regime  # Previous public spelling.
 
 
 @njit(nogil=True, cache=True)
@@ -399,6 +444,6 @@ def check_cnst(bmat, bterm, s, l, k, q0, available=None):
     """constraint value in period s given CDR-state q0 under the assumptions (l,k)"""
     require_regime(available, l, k)
     value = bmat[s, l, k] @ q0 + bterm[s, l, k]
-    if available is not None and not np.isfinite(value):
+    if not np.isfinite(value):
         raise UnresolvedRegimeError(l, k)
     return value

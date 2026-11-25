@@ -13,6 +13,7 @@ from emcwrap import get_prior
 from .exceptions import InvalidProposalError, UnresolvedRegimeError
 from .filtering import get_ll
 from .mpile import get_par, set_par
+from .regime_path import resolve_regime_fallback_digits
 
 
 class ProposalEvaluation(NamedTuple):
@@ -38,6 +39,8 @@ def prep_estim(
     use_prior_transform=None,
     verbose=True,
     debug=False,
+    verify_regime_path=True,
+    regime_fallback_decimal_digits=...,
     **filterargs
 ):
     """Initializes the tools necessary for estimation
@@ -60,6 +63,13 @@ def prep_estim(
         Random seed. Defaults to 0
     dispatch : bool, optional
         Whether to use a dispatcher to create jitted transition and observation functions. Defaults to False.
+    verify_regime_path : bool, optional
+        Check the inequality at every date on the regime grid. Defaults to True.
+        The numerical safeguards for sensitive regimes apply with either setting.
+    regime_fallback_decimal_digits : int or None, optional
+        Significant decimal digits for regime recovery. Defaults to the model's
+        setting (initially 200). With None, a required high-precision check
+        raises UnresolvedRegimeError. The TEnKF has its own fallback_decimal_digits.
     verbose : bool/int, optional
         Whether display messages:
             0 - no messages
@@ -71,6 +81,7 @@ def prep_estim(
 
     import warnings
 
+    digits = resolve_regime_fallback_digits(regime_fallback_decimal_digits, self.fdict)
     # all that should be reproducible
     np.random.seed(seed)
 
@@ -110,7 +121,8 @@ def prep_estim(
 
     self.debug |= debug
 
-    set_par(self, "prior_mean", verbose=verbose > 3, l_max=l_max, k_max=k_max)
+    set_par(self, "prior_mean", verbose=verbose > 3, l_max=l_max, k_max=k_max,
+            verify_regime_path=verify_regime_path, regime_fallback_decimal_digits=digits)
 
     if linear and linear != 'IF':
         self.create_filter(ftype="KalmanFilter", **filterargs)
@@ -180,7 +192,8 @@ def prep_estim(
 
                 # the gen_sys and following part replicates call to set_par, redundant
                 self.gen_sys(
-                    par=par_active_lst, l_max=l_max, k_max=k_max, verbose=verbose > 3
+                    par=par_active_lst, l_max=l_max, k_max=k_max, verbose=verbose > 3,
+                    verify_regime_path=verify_regime_path, regime_fallback_decimal_digits=digits
                 )
                 self.filter.Q = self.QQ(self.ppar) @ self.QQ(self.ppar)
 

@@ -9,7 +9,7 @@ import pytest
 from scipy.stats.qmc import LatinHypercube
 from threadpoolctl import threadpool_limits
 
-from pydsge import DSGE, engine
+from pydsge import DSGE, engine, gen_sys_from_dict
 from pydsge.exceptions import UnresolvedRegimeError
 
 
@@ -21,6 +21,27 @@ NK_PROPOSAL = np.array([
     0.8130353874184681, 0.07787885938876356, 0.7980609993381669,
     0.1615529783771566, 0.43777517486638245,
 ])
+
+
+@pytest.mark.parametrize("value", [0, -1, False, np.bool_(True), 50.5, "200"])
+def test_invalid_regime_precision_fails_before_model_construction(value):
+    with pytest.raises(ValueError, match="regime_fallback_decimal_digits"):
+        gen_sys_from_dict({}, regime_fallback_decimal_digits=value)
+
+
+def test_dict_model_cache_distinguishes_precision():
+    # x = .5*x(-1) + .25*(r - x) + u, with shadow rate r = x.
+    data = dict(vars=np.array(["x", "r"]), const_var="r", shocks=["u"],
+                AA=np.zeros((1, 2)), BB=np.array([[1.25, -0.25]]), CC=np.array([[-0.5, 0.]]),
+                DD=np.array([[-1.]]), fb=np.array([1., -1.]), fc=np.zeros(2),
+                ZZ0=np.empty(0), x_bar=-1.)
+    options = dict(l_max=2, k_max=3, parallel=False, verbose=False)
+    default = gen_sys_from_dict(data, **options)
+    disabled = gen_sys_from_dict(data, **options, regime_fallback_decimal_digits=None)
+    assert default is not disabled
+    assert gen_sys_from_dict(data, **options, regime_fallback_decimal_digits=200) is default
+    assert gen_sys_from_dict(data, **options, regime_fallback_decimal_digits=None) is disabled
+    assert disabled.regime_paths.regime_fallback_decimal_digits is None
 
 
 def nk_likelihood(k_max, proposal=NK_PROPOSAL):
@@ -56,6 +77,58 @@ def test_real_nk_proposal_preserves_likelihood_and_all_selected_regimes():
     assert full.ll == short.ll
     assert regimes == expected_regimes == [((0, 0), 0)] * (3 * 32)
     assert full.precalc_mat[0].shape[1] == 65
+
+
+@pytest.mark.parametrize("options", [{}, {"regime_fallback_decimal_digits": 80},
+                                     {"regime_fallback_decimal_digits": None}],
+                         ids=["default", "80-digits", "disabled"])
+def test_nk_transition_selects_one_delayed_elb_period_on_the_full_grid(options):
+    """2009Q4, step 60/walker 23, upstream forecast member 30."""
+    model = DSGE.read(str(Path(__file__).parent / "resources" / "nk_small.yaml"))
+    proposal = {
+        "sigetab": 0.15666569101694547, "sigetap": 0.14419405337917843, "sigetar": 0.12548556701344102,
+        "rhob": 0.9518516488260561, "rhop": 0.9948800002095105, "rhor": 0.12923233486950358,
+        "sigc": 1.3154836743967901, "xip": 0.6427315100043057, "rpi": 1.9290546144994951,
+        "rho": 0.919289091149836, "ry": 0.0935956933505108, "pibar": 0.8277086533254504,
+        "timepref": 0.33994589080876175, "gambar": 0.3781579509093228,
+    }
+    par = [proposal.get(p.name, value) for p, value in zip(model.parameters, model.par_fix, strict=True)]
+    state = np.array([-1.6348862459408866, 2.461626217010558, 7.652043946434822,
+                      0.16543393613277552, -12.888139901294837])
+    shock = np.array([0.1982358678621746, -0.31351688927160654, 0.24782299953087153])
+    with threadpool_limits(limits=1, user_api="blas"):
+        model.gen_sys(par=par, l_max=32, k_max=64, verbose=False, **options)
+        assert model.regime_paths.pending[0, 58]
+        digits = options.get("regime_fallback_decimal_digits", 200)
+        if digits is None:
+            with pytest.raises(UnresolvedRegimeError, match=r"L=0, K=58"):
+                model.t_func(state, shock, set_k=(0, 58))
+            for full in (True, False):
+                model.verify_regime_path = full
+                with pytest.raises(UnresolvedRegimeError):
+                    model.t_func(state, shock)
+            assert model.regime_paths._precision is None
+            return
+        (_, forecast), regime, flag = model.t_func(state, shock, return_k=True, get_obs=True)
+        assert model.regime_paths._precision[0].dps == digits
+        initial = np.r_[state, shock]
+        assert model.regime_paths.repaired[0, 58]
+        false_path = model.traj(initial, l=0, k=58, verbose=False) - model.x_bar
+        selected_path = model.traj(initial, verbose=False) - model.x_bar
+        model.verify_regime_path = False
+        _, guarded_regime, guarded_flag = model.t_func(state, shock, return_k=True)
+
+    # Independent backward solution of the IS, Phillips and policy equations,
+    # using the stable free continuation after one delayed ELB period. The
+    # shadow-rate margins at entry, binding and release are +.00624, -.0290,
+    # +.04392. For 58 immediate ELB periods the first margin is +2.75e17.
+    assert (regime, flag) == ((1, 1), 0)
+    assert (guarded_regime, guarded_flag) == (regime, flag)
+    assert false_path[0] == pytest.approx(2.7536266941088144e17, rel=1e-10)
+    np.testing.assert_allclose(selected_path[:3], [.00624, -.0290, .04392], atol=5e-5)
+    assert np.all(selected_path[2:] >= 0)
+    np.testing.assert_allclose(forecast, [-0.19025563980219676, -1.307393577631679,
+                                         0.006241059715952433], rtol=0, atol=1e-9)
 
 
 def test_partial_grid_matches_complete_grid_and_rejects_required_hole(monkeypatch, caplog):

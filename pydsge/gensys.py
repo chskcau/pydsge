@@ -10,6 +10,7 @@ import scipy.linalg as sl
 import cloudpickle as cpickle
 from grgrlib import fast0, ouc, klein, speed_kills
 from .engine import preprocess
+from .regime_path import DEFAULT_REGIME_FALLBACK_DIGITS, RegimePaths, resolve_regime_fallback_digits
 from .exceptions import InvalidProposalError
 from .clsmethods import Model
 from .parser import DSGE
@@ -18,14 +19,18 @@ aca = np.ascontiguousarray
 
 
 def gen_sys_from_dict(
-    mdict, l_max=None, k_max=None, parallel=True, force_processing=False, verbose=True
+    mdict, l_max=None, k_max=None, parallel=True, force_processing=False, verbose=True,
+    *, verify_regime_path=True, regime_fallback_decimal_digits=...
 ):
 
     global processed_mdicts
 
+    digits = resolve_regime_fallback_digits(regime_fallback_decimal_digits, mdict)
     # add l/k max to dict
     mdict["l_max"] = l_max
     mdict["k_max"] = k_max
+    mdict["verify_regime_path"] = verify_regime_path
+    mdict = dict(mdict, regime_fallback_decimal_digits=digits)
 
     # check if dict has already been processed. If so, load it
     if not force_processing and "processed_mdicts" in globals():
@@ -94,6 +99,8 @@ def gen_sys_from_dict(
         False,
         parallel,
         verbose,
+        verify_regime_path,
+        regime_fallback_decimal_digits=digits,
     )
 
     processed_mdicts[cpickle.dumps(mdict)] = res_sys
@@ -109,9 +116,19 @@ def gen_sys_from_yaml(
     get_hx_only=False,
     parallel=False,
     verbose=True,
+    *,
+    verify_regime_path=None,
+    regime_fallback_decimal_digits=...,
     **args
 ):
+    """Build the model for these parameters. By default endogenous regimes are
+    checked throughout the finite grid. Set verify_regime_path=False for only
+    the switching-date tests. regime_fallback_decimal_digits sets the precision
+    of numerical recovery (initially 200). None disables recovery. Later calls
+    inherit the model's chosen settings.
+    """
 
+    digits = resolve_regime_fallback_digits(regime_fallback_decimal_digits, getattr(self, "fdict", {}))
     self.par = self.p0() if par is None else list(par)
     try:
         self.ppar = self.pcompile(self.par)  # parsed par
@@ -174,6 +191,8 @@ def gen_sys_from_yaml(
         get_hx_only,
         parallel,
         verbose,
+        verify_regime_path=verify_regime_path,
+        regime_fallback_decimal_digits=digits,
         **args
     )
 
@@ -195,6 +214,8 @@ def gen_sys(
     get_hx_only,
     parallel,
     verbose,
+    verify_regime_path=None,
+    *, regime_fallback_decimal_digits=DEFAULT_REGIME_FALLBACK_DIGITS,
 ):
     """Generate system matrices expressed in the one-sided, first-order compressed dimensionality reduction given a set of parameters.
 
@@ -209,6 +230,12 @@ def gen_sys(
         The expected number of periods *until* the constraint binds (defaults to 3).
     k_max : int, optional
         The expected number of periods for which the constraint binds (defaults to 17).
+    verify_regime_path : bool, optional
+        Verify every period of an endogenous regime on the finite search horizon.
+        Initially True. Omitting it on later calls preserves the model's setting.
+    regime_fallback_decimal_digits : int or None, optional
+        Significant decimal digits for regime recovery (initially 200).
+        None disables high-precision recomputation.
     verbose : bool or int, optional
         Level of verbosity
     """
@@ -352,6 +379,9 @@ def gen_sys(
     PR = -np.hstack((BBR[:, inq], AA[:, inp]))
     MR = np.hstack((CCR[:, inq], BBR[:, inp]))
     gg = np.pad([float(self.x_bar)], (dimp + dimq - 1, 0))
+    # The RQ row operations below are rounded in Float64. A long binding
+    # regime can amplify those perturbations enough to reverse the inequality.
+    original_system = PU, MU, PR, MR, gg
 
     # avoid QL in jitted funcs
     R, Q = sl.rq(MU.T)
@@ -390,7 +420,15 @@ def gen_sys(
     self.ff = fq1, fp1, fq0
 
     # preprocess all system matrices until (l_max, k_max)
-    preprocess(self, PU, MU, PR, MR, gg, fq1, fp1, fq0, parallel, verbose)
+    suspect = preprocess(self, PU, MU, PR, MR, gg, fq1, fp1, fq0, parallel, verbose)
+    self.regime_paths = RegimePaths(original_system, self.sys, self.ff, suspect,
+                                   regime_fallback_decimal_digits=regime_fallback_decimal_digits)
+    self.regime_paths.restore_free_cells(self.precalc_mat)
+    if not hasattr(self, "fdict"):
+        self.fdict = {}
+    self.fdict["regime_fallback_decimal_digits"] = regime_fallback_decimal_digits
+    if verify_regime_path is not None or not hasattr(self, "verify_regime_path"):
+        self.verify_regime_path = True if verify_regime_path is None else verify_regime_path
 
     if verbose:
         print(

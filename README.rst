@@ -32,6 +32,11 @@ Installing the stable version is as simple as typing
 
 in your terminal (Linux/MacOS) or Anaconda Prompt (Win). 
 
+For development on this fork, keep the EconSieve and grgrlib forks in sibling
+directories named ``../econsieve`` and ``../grgrlib``. From the pydsge checkout,
+run ``uv sync --locked`` to install both in editable mode. Run the tests with
+``uv run pytest`` or select this checkout's ``.venv`` interpreter in VS Code.
+
 Documentation
 -------------
 
@@ -40,6 +45,47 @@ Documentation can be found on `ReadTheDocs <https://pydsge.readthedocs.io/en/lat
 - `Installation Guide <https://pydsge.readthedocs.io/en/latest/installation_guide.html>`_
 - `Getting Started <https://pydsge.readthedocs.io/en/latest/getting_started.html>`_
 - `Module Documentation <https://pydsge.readthedocs.io/en/latest/modules.html>`_
+
+Checking the constraint path
+----------------------------
+
+For a given state and current innovations, the solver sets future innovations
+to zero. A candidate ``(L, K)`` has ``L`` initially free periods followed by
+``K`` binding periods and then the free decision rule. ``(0, 0)`` denotes
+the entirely free continuation. A new innovation next period can change
+the selected regime.
+
+By default, an endogenous candidate that passes the switching-date tests must
+also satisfy the constraint in **every period on the grid**, through the latest
+release date represented by the grid. This includes the free continuation
+after an early release. For binding candidates the solver checks the path
+against the model equations before their RQ transformation. An interior
+violation makes the search continue in its original order. Use
+``model.gen_sys(..., verify_regime_path=False)`` or
+``model.prep_estim(..., verify_regime_path=False)`` to request the
+switching-date checks alone. Explicitly imposing a regime with ``set_k``
+still permits counterfactual paths.
+
+Both settings monitor the conditioning of the backward recursion. When the
+estimated condition number exceeds the inverse square root of machine
+epsilon, a candidate or a successor depending on it is recomputed on demand
+from the original equations. The default precision is 200 significant decimal
+digits. Set ``regime_fallback_decimal_digits`` to a positive integer in
+``gen_sys``, ``set_par`` or ``prep_estim`` to change it. Later calls on the
+model inherit the setting, including after saving and loading model metadata.
+With ``None``, the solver still checks conditioning and follows
+``verify_regime_path``. If a required regime needs a high-precision check,
+it raises ``UnresolvedRegimeError``. In the likelihood this follows the
+usual unresolved-proposal handling.
+
+For example, with a TEnKF that supports configurable precision, the following
+call uses 300 digits for the regime solver and 100 digits for the filter.
+
+.. code-block:: python
+
+   model.prep_estim(regime_fallback_decimal_digits=300, fallback_decimal_digits=100)
+
+The free terminal policy and model inputs retain their original Float64 precision.
 
 Citation
 --------
