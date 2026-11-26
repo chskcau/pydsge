@@ -79,6 +79,36 @@ def test_real_nk_proposal_preserves_likelihood_and_all_selected_regimes():
     assert full.precalc_mat[0].shape[1] == 65
 
 
+def test_nk_2000q3_filter_uses_unrounded_forecasts_with_common_draws():
+    """Step 99/walker 0. Freeze the archived forecast inputs, before solving the model."""
+    resources = Path(__file__).parent / "resources"
+    mod = DSGE.read(str(resources / "nk_small.yaml"), nocache=True)
+    mod.load_data(pd.DataFrame([[-0.21643063688796538, 0.5829637584435332, 1.63]],
+                               columns=["dy", "pinfobs", "robs"]))
+    proposal = {
+        "sigetab": .1650194432493293, "sigetap": .1524811395850479, "sigetar": .2428044315548397,
+        "rhob": .6609736881851435, "rhop": .9886587864762852, "rhor": .30746053531430423,
+        "sigc": .16069348182851056, "xip": .6382114564317779, "rpi": 2.5134262462838146,
+        "rho": .6442236265723346, "ry": .21586312300752392, "pibar": .37244957134329076,
+        "timepref": .34932935274631405, "gambar": .3283284123092366,
+    }
+    par = [proposal.get(p.name, v) for p, v in zip(mod.parameters, mod.par_fix, strict=True)]
+    states, shocks, noise = np.split(np.loadtxt(resources / "nk_2000q3_forecast_inputs.txt"), [5, 8], axis=1)
+    with threadpool_limits(1):
+        mod.gen_sys(par=par, l_max=32, k_max=64, verbose=False)
+        filt = mod.create_filter(N=len(states), R=np.eye(3) * 1e-12, reduced_form=True)
+        def draws(mean, cov, size, **kwargs):
+            if cov is filt.P:
+                return states
+            return shocks[None] if cov is filt.Q else noise[None]
+        filt.multivariate = draws
+        ll = mod.run_filter(smoother=False, get_ll=True)
+    # Independent 200-digit solution of the three NK equations and one full
+    # ensemble update on these inputs. Scoring the old float64 forecasts gave -66.19076808.
+    assert ll == pytest.approx(-67.74428367480442, rel=0, abs=1e-7)
+    assert filt.high_precision_completed == 1
+
+
 @pytest.mark.parametrize("options", [{}, {"regime_fallback_decimal_digits": 80},
                                      {"regime_fallback_decimal_digits": None}],
                          ids=["default", "80-digits", "disabled"])

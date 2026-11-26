@@ -6,6 +6,7 @@ import econsieve
 import numpy as np
 import scipy.linalg as sl
 import pandas as pd
+from collections import deque
 from econsieve import KalmanFilter, TEnKF
 from grgrlib import timeprint
 from grgrlib.multiprocessing import serializer
@@ -13,6 +14,7 @@ from econsieve.stats import logpdf
 from .engine import require_regime
 from .exceptions import UnresolvedForecastError
 from .precision import current_precision
+from .tools import o_func as model_observation, t_func as model_transition
 
 # Older EconSieve versions do not offer the explicit precision-rejection policy.
 _precision_required = getattr(econsieve, "ForecastPrecisionRequired", ())
@@ -27,23 +29,64 @@ def create_obs_cov(self, scale_obs=0.1):
     return obs_cov
 
 
-def get_p_init_lyapunov(self, Q):
+def _stationary_initial_root(transition, impact, shock_cov, covariance):
+    """Factor the stationary shock response directly when rounding P can inflate its weak directions.
 
+    sqrtm on an already rounded, singular P can turn an O(eps) eigenvalue
+    error into an O(sqrt(eps)) initial draw. Factoring the impulse responses
+    before squaring also retains genuine small innovations.
+    """
+    eig = sl.eigvalsh((covariance + covariance.T) * 0.5)
+    eps = np.finfo(float).eps
+    if eig[-1] == 0 and not np.any(shock_cov):
+        return None
+    if eig[0] > 64 * len(eig) * eps * max(abs(eig)):
+        return None  # The existing principal-root calculation is well conditioned.
+
+    noise, vectors = sl.eigh(shock_cov)
+    if noise[0] < -len(noise) * eps * max(abs(noise)):
+        raise ValueError("The shock covariance must be positive semidefinite.")
+    factor = impact @ (vectors * np.sqrt(np.maximum(noise, 0)))
+    power = transition
+    # If B B' sums 2^j terms of the stationary Gramian, [B, F^(2^j) B]
+    # factors the sum for 2^(j+1) terms. QR keeps at most dim_x columns.
+    for _ in range(64):
+        if sl.norm(power, np.inf) <= eps:
+            break
+        block = np.column_stack((factor, power @ factor))
+        _, triangular = sl.qr(block.T, mode="economic")
+        factor = triangular.T
+        power = power @ power
+    else:
+        raise FloatingPointError("No stationary initial covariance factor could be established.")
+    # A triangular factor has the right covariance but rotates the seeded draws.
+    # Preserve the principal, symmetric root used by the existing QMC convention.
+    u, singular, _ = sl.svd(factor, full_matrices=False)
+    return (u * singular) @ u.T
+
+
+def _stationary_initialization(self, shocks, *, reduced, sampling_root):
     require_regime(getattr(self, "regime_available", None), 1, 0)
-    pmat = self.precalc_mat[0]
-    qmat = self.precalc_mat[1]
+    pmat, qmat = self.precalc_mat[:2]
+    block = qmat[1, 0][:-self.neps]
+    F, E = block[:, :-self.neps], block[:, -self.neps:]
+    if not reduced:
+        F = np.vstack((pmat[1, 0][:, :-self.neps], F))
+        E = np.vstack((pmat[1, 0][:, -self.neps:], E))
+    noise = E @ shocks @ E.T
+    if reduced:
+        transition = F
+        covariance = sl.solve_discrete_lyapunov(F, noise)
+    else:
+        p4 = sl.solve_discrete_lyapunov(F[self.dimp:, :], noise[self.dimp:, self.dimp:])
+        covariance = F @ p4 @ F.T + noise
+        transition = np.pad(F, ((0, 0), (self.dimp, 0)))
+    root = _stationary_initial_root(transition, E, shocks, covariance) if sampling_root else None
+    return covariance, root
 
-    F = np.vstack((pmat[1, 0][:, : -self.neps], qmat[1, 0]
-                  [: -self.neps, : -self.neps]))
 
-    E = np.vstack((pmat[1, 0][:, -self.neps:], qmat[1, 0]
-                  [: -self.neps, -self.neps:]))
-    Q = E @ Q @ E.T
-
-    p4 = sl.solve_discrete_lyapunov(
-        F[self.dimp:, :], Q[self.dimp:, self.dimp:])
-
-    return F @ p4 @ F.T + Q
+def get_p_init_lyapunov(self, Q):
+    return _stationary_initialization(self, Q, reduced=False, sampling_root=False)[0]
 
 
 def get_eps_lin(self, x, xp, rcond=1e-14):
@@ -184,6 +227,7 @@ def run_filter(
         self.filter.init_cov = init_cov
 
     # assign current transition & observation functions (of parameters)
+    batch_options = {}
     if self.filter.name == "KalmanFilter":
 
         require_regime(getattr(self, "regime_available", None), 1, 0)
@@ -228,32 +272,44 @@ def run_filter(
         self.filter.o_func = o_func_jit
         self.filter.get_eps = get_eps_jit
 
-    elif self.filter.reduced_form:
-        self.filter.t_func = lambda *x: self.t_func(*x, get_obs=True)
-        self.filter.o_func = None
-
-        if self.filter.init_cov is None:
-            require_regime(getattr(self, "regime_available", None), 1, 0)
-            qmat = self.precalc_mat[1]
-            F = qmat[1, 0][: -self.neps, : -self.neps]
-            E = qmat[1, 0][: -self.neps, -self.neps:]
-
-            Q = E @ self.filter.Q @ E.T
-
-            self.filter.P = sl.solve_discrete_lyapunov(F, Q)
-        else:
-            self.filter.P = self.filter.init_cov
-
     else:
-        self.filter.t_func = self.t_func
-        self.filter.o_func = self.o_func
-
+        if self.filter.reduced_form:
+            self.filter.t_func = lambda *x: self.t_func(*x, get_obs=True)
+            self.filter.o_func = None
+        else:
+            self.filter.t_func = self.t_func
+            self.filter.o_func = self.o_func
         if self.filter.init_cov is None:
-            self.filter.P = get_p_init_lyapunov(self, self.filter.Q)
+            self.filter.P, root = _stationary_initialization(
+                self, self.filter.Q, reduced=self.filter.reduced_form, sampling_root=self.filter.name == "TEnKF")
+            if root is not None:
+                batch_options["initial_cov_root"] = root
         else:
             self.filter.P = self.filter.init_cov
 
     self.filter.get_eps = self.get_eps_lin
+
+    if (self.filter.name == "TEnKF" and not dispatch and hasattr(self, "regime_paths")
+            and getattr(self.filter, "precise_forecast", ...) is None):
+        reduced = self.filter.reduced_form
+        predict_state = self.t_func
+        # A custom transition can change X or Y even when decorated with
+        # functools.wraps. An observer may explicitly opt in to native replay.
+        native_forecast = (getattr(predict_state, "__func__", predict_state) is model_transition
+                           or getattr(predict_state, "preserves_model_forecast", False))
+        if (native_forecast
+                and (reduced or getattr(self.o_func, "__func__", None) is model_observation)):
+            # Keep the actual member choices so a retry repeats neither the regime search nor the draws.
+            regimes = deque(maxlen=self.filter.N)
+
+            def predict(state, shocks):
+                result, pair, flag = self.t_func(state, shocks, get_obs=reduced, return_k=True)
+                regimes.append(pair)
+                return result, flag
+
+            self.filter.t_func = predict
+            batch_options["precise_forecast"] = lambda states, shocks: self.regime_paths.forecast_ensemble(
+                regimes, states, shocks, self.hx, reduced)
 
     if self.filter.name == "KalmanFilter":
 
@@ -304,6 +360,7 @@ def run_filter(
         try:
             res = self.filter.batch_filter(
                 self.Z, calc_ll=get_ll, store=smoother, seed=seed, verbose=verbose > 0,
+                **batch_options,
                 **({"ll_contributions": ll_contributions} if ll_contributions is not None else {})
             )
         except _precision_required as exc:

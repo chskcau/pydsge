@@ -349,6 +349,30 @@ class RegimePaths:
             self._repair(l, k, matrices)
 
     @timed_regime_operation
+    def forecast_ensemble(self, regimes, states, shocks, hx, reduced=True):
+        """Apply the selected conditional rules and measurement equations before rounding."""
+        n = states.shape[1]
+        nq = self.d - shocks.shape[1]
+        inputs = np.vstack((states[states.shape[0] - nq:], shocks.T, np.ones(n)))
+        x = np.empty(states.shape, dtype=object)
+        y = np.empty((len(hx[2]), n), dtype=object)
+        groups = {}
+        for member, pair in enumerate(regimes):
+            groups.setdefault(pair, []).append(member)
+        for (l, k), members in groups.items():
+            try:
+                ctx, rules = self._precise_rules(l, k)
+                current = rules[l, k][0] * ctx.matrix(inputs[:, members].tolist())
+            except ZeroDivisionError as exc:
+                raise UnresolvedRegimeError(l, k) from exc
+            hxp, hxq, hxc = (ctx.matrix(a.tolist()) for a in hx)
+            q = current[:nq, :]
+            obs = hxp * current[self.d:, :] + hxq * q + hxc * ctx.ones(1, len(members))
+            x[:, members] = q.tolist() if reduced else current[self.d:, :].tolist() + q.tolist()
+            y[:, members] = obs.tolist()
+        return x, y
+
+    @timed_regime_operation
     def transition(self, l, k, state):
         ctx, rules = self._precise_rules(l, k)
         current = rules[l, k][0] * ctx.matrix([*state.tolist(), 1.0])

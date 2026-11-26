@@ -41,6 +41,19 @@ def shift_model(**options):
     return paths, matrices
 
 
+@pytest.mark.parametrize("reduced", [True, False])
+def test_ensemble_keeps_sub_ulp_measurement_offset_and_member_order(reduced):
+    paths, _ = shift_model()
+    states = np.zeros((7 if reduced else 8, 3))
+    states[-6] = [2.**60, -2.**60, 2.**60]
+    shocks = np.array([[1.], [2.], [3.]])
+    hx = np.zeros((1, 1)), np.eye(7)[:1], np.array([1.])
+    x, y = paths.forecast_ensemble([(0, 1), (0, 0), (0, 1)], states, shocks, hx, reduced)
+    assert x.shape == states.shape
+    assert all(a - b == 1 for a, b in zip(y[0], states[-6], strict=True))
+    np.testing.assert_array_equal(np.asarray(x[-1], dtype=float), shocks[:, 0])
+
+
 @pytest.mark.parametrize(
     ("state", "old_choice"),
     [

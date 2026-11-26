@@ -9,6 +9,29 @@ import pytest
 from pydsge import DSGE, InvalidProposalError
 
 
+@pytest.mark.parametrize("weak_scale", [0.0, 1e-10])
+def test_stationary_root_keeps_the_true_weak_direction(weak_scale):
+    from pydsge.filtering import _stationary_initial_root
+
+    # In this basis, the stationary covariance is diag(2, 2*weak_scale**2)/(1-rho**2).
+    # Its entries round to the same value in float64 for both requested weak scales.
+    impact = np.array([[1., weak_scale], [1., -weak_scale]])
+    rho = 0.75
+    transition = rho * np.eye(2)
+    covariance = impact @ impact.T / (1 - rho**2)
+    root = _stationary_initial_root(transition, impact, np.eye(2), covariance)
+    np.testing.assert_allclose(root, root.T, atol=1e-15)
+    expected = np.sqrt(2 / (1 - rho**2))
+    np.testing.assert_allclose(root @ [1., -1.], expected * weak_scale * np.array([1., -1.]), atol=2e-15)
+    np.testing.assert_allclose(root @ [1., 1.], [expected, expected], rtol=2e-15)
+
+
+def test_well_conditioned_stationary_covariance_keeps_existing_draw_convention():
+    from pydsge.filtering import _stationary_initial_root
+
+    assert _stationary_initial_root(0.5 * np.eye(2), np.eye(2), np.eye(2), np.eye(2) / 0.75) is None
+
+
 def _state_mapping(mod, reduced_form=False):
     loadings = {"x": [1.0, 0.0], "z": [0.0, 1.0], "r": [0.0, 1.0]}
     names = mod.svv if reduced_form else mod.vv
@@ -405,6 +428,11 @@ def test_ensemble_filter_covariances(ensemble_model, monkeypatch, specified_cov)
     np.testing.assert_allclose(call["Q"], np.diag([0.4**2, 0.7**2]))
     np.testing.assert_allclose(call["R"], [[0.09, 0.025], [0.025, 0.16]])
     np.testing.assert_allclose(call["P"], expected_cov, rtol=1e-12, atol=1e-12)
+    if not specified_cov and np.linalg.matrix_rank(expected_cov) < len(expected_cov):
+        root = call["initial_cov_root"]
+        np.testing.assert_allclose(root.T @ root, expected_cov, atol=1e-13)
+    else:
+        assert "initial_cov_root" not in call
     assert call["calc_ll"] is True
     assert not call["store"]
     assert call["seed"] == 17
